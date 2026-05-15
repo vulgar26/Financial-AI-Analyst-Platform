@@ -160,3 +160,11 @@ app:
     tool-timeout: 3s
     # WRITE 阶段 ChatClient 流式超时（应小于 total-timeout）
     llm-stream-timeout: 20s
+  agent-task:
+    default-max-retries: 0
+    worker:
+      enabled: true
+      # @Scheduled fixedDelayString，单位为毫秒；V1 不引入 MQ/Kafka。
+      fixed-delay: 2000
+      batch-size: 5
+      lease-seconds: 60
