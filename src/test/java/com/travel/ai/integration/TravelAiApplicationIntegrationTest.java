@@ -245,7 +245,7 @@ class TravelAiApplicationIntegrationTest {
     }
 
     @Test
-    void evalCheckpointPersistsToolSnapshotWhenEvalToolScenarioProvided() {
+    void evalCheckpointPersistsToolSnapshotWhenEvalToolScenarioProvided() throws Exception {
         String planNoRetrieve = """
                 {
                   "plan_version": "v1",

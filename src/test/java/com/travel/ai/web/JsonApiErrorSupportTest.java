@@ -1,8 +1,8 @@
 package com.travel.ai.web;
 
-import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.http.HttpStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -13,7 +13,7 @@ class JsonApiErrorSupportTest {
         MockHttpServletResponse resp = new MockHttpServletResponse();
         JsonApiErrorSupport.write(
                 resp,
-                HttpServletResponse.SC_TOO_MANY_REQUESTS,
+                HttpStatus.TOO_MANY_REQUESTS.value(),
                 "RATE_LIMITED",
                 "请求过于频繁，请稍后再试");
         assertThat(resp.getStatus()).isEqualTo(429);

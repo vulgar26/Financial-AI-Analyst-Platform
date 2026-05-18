@@ -5,6 +5,7 @@ import com.travel.ai.feedback.dto.FeedbackCreatedResponse;
 import com.travel.ai.feedback.dto.FeedbackListResponse;
 import com.travel.ai.feedback.dto.FeedbackItemResponse;
 import com.travel.ai.feedback.dto.FeedbackSubmitRequest;
+import com.travel.ai.security.JwtService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -34,6 +35,9 @@ class FeedbackControllerMvcTest {
 
     @MockBean
     private FeedbackService feedbackService;
+
+    @MockBean
+    private JwtService jwtService;
 
     @Test
     @WithMockUser(username = "demo")
