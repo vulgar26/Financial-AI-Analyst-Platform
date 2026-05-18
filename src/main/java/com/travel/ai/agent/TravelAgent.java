@@ -804,6 +804,7 @@ public class TravelAgent implements FinancialAnalystAgent {
                 .withAttr("empty_hits_behavior", emptyHitsBehavior != null ? emptyHitsBehavior : "")
                 .withAttr("skip_llm", String.valueOf(d.skipLlm()))
                 .withAttr("reason", reason));
+        appendFinanceGuardForMarketData(ctx);
         switch (d.reason()) {
             case APPLIED_CLARIFY_RAG_EMPTY, APPLIED_CLARIFY_TOOL_NO_PAYLOAD -> log.info(
                     "[guard] empty_hits gate=clarify error_code={} requestId={}",
@@ -816,6 +817,27 @@ public class TravelAgent implements FinancialAnalystAgent {
         }
 
         logStageBoundary(StageName.GUARD, t0, ctx);
+    }
+
+    private void appendFinanceGuardForMarketData(MainAgentTurnContext ctx) {
+        if (ctx == null || !shouldApplyMarketDataOutputGuard(ctx.toolPreface)) {
+            return;
+        }
+        ctx.policyEvents.add(PolicyEvent.of(
+                        "finance_guard",
+                        "guard",
+                        "allow",
+                        "market_data_mock_disclosure",
+                        null,
+                        ctx.requestId
+                )
+                .withAttr("workflow_id", "market_data_explain")
+                .withAttr("connector", "market_data")
+                .withAttr("mock_mode", "true")
+                .withAttr("freshness", "mock_non_realtime")
+                .withAttr("tradable", "false")
+                .withAttr("disclosure_required", "true")
+                .withAttr("investment_advice_allowed", "false"));
     }
 
     /**
