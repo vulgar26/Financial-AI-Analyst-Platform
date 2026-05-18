@@ -2,14 +2,15 @@ package com.travel.ai.security;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
 import java.security.Key;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.nio.charset.StandardCharsets;
-import javax.crypto.spec.SecretKeySpec;
 import java.util.Date;
 import java.util.Map;
 import java.util.function.Function;
@@ -40,7 +41,7 @@ public class JwtService {
                 .setSubject(userDetails.getUsername())
                 .setIssuedAt(now)
                 .setExpiration(expiry)
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .signWith(getSigningKey())
                 .compact();
     }
 
@@ -71,10 +72,17 @@ public class JwtService {
     }
 
     private Key getSigningKey() {
-        // 开发环境最小实现：用原始字符串字节构造 HMAC-SHA256 密钥
-        // 注意：生产环境请改为使用足够强度的随机密钥并安全存储
+        // JJWT / RFC 7518：HS256 密钥材料须 ≥256 bit。短占位串（如默认 change-me-in-local）先 SHA-256 派生为 32 字节。
+        // 配置 ≥32 字节 UTF-8 的 secret 时仍直接使用（与旧 SecretKeySpec 行为一致）。
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
-        return new SecretKeySpec(keyBytes, SignatureAlgorithm.HS256.getJcaName());
-     }
+        if (keyBytes.length < 32) {
+            try {
+                keyBytes = MessageDigest.getInstance("SHA-256").digest(keyBytes);
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalStateException("SHA-256 not available", e);
+            }
+        }
+        return Keys.hmacShaKeyFor(keyBytes);
+    }
 }
 
