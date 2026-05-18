@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Mock market data tool placeholder.
@@ -14,6 +15,8 @@ import java.util.Locale;
  */
 @Component
 public class MarketDataTool implements GovernedAgentTool {
+
+    private static final Pattern PE_TOKEN_PATTERN = Pattern.compile("(^|[^a-z0-9])pe([^a-z0-9]|$)");
 
     @Override
     public String name() {
@@ -29,9 +32,15 @@ public class MarketDataTool implements GovernedAgentTool {
         return q.contains("行情")
                 || q.contains("股价")
                 || q.contains("市场数据")
+                || q.contains("p/e")
+                || PE_TOKEN_PATTERN.matcher(q).find()
+                || q.contains("成交量")
+                || q.contains("涨跌")
+                || q.contains("估值")
                 || q.contains("market")
                 || q.contains("quote")
                 || q.contains("price")
+                || q.contains("volume")
                 || q.contains("ticker");
     }
 
@@ -52,14 +61,22 @@ public class MarketDataTool implements GovernedAgentTool {
     @Override
     public String observe(String input) {
         String symbol = input == null || input.isBlank() ? "MOCK" : input;
+        Instant timestamp = Instant.now();
         return """
+                mockMode=true
                 mock_market_data=true
+                data_source=local_mock
                 symbol=%s
+                timestamp=%s
                 as_of=%s
+                freshness=mock_non_realtime
+                tradable=false
+                real_financial_api_used=false
+                trading_capability_used=false
+                not_for_trading=true
                 last_price=123.45
                 change_pct=0.00
                 note=This is placeholder market data for agent workflow validation only. It is not real-time data and must not be used for trading.
-                """.formatted(symbol, Instant.now());
+                """.formatted(symbol, timestamp, timestamp);
     }
 }
-

@@ -430,6 +430,33 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.stage_order[2]").value("TOOL"));
     }
 
+    @Test
+    void marketDataExplain_evalToolSuccess_hasToolStageAndToolOk() throws Exception {
+        String body = """
+                {
+                  "query": "解释一下 AAPL 的 price、P/E 和成交量，不要给交易建议",
+                  "mode": "AGENT",
+                  "eval_tool_scenario": "success"
+                }
+                """;
+        mockMvc.perform(post("/api/v1/eval/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.meta.stage_order.length()").value(5))
+                .andExpect(jsonPath("$.meta.stage_order[0]").value("PLAN"))
+                .andExpect(jsonPath("$.meta.stage_order[1]").value("RETRIEVE"))
+                .andExpect(jsonPath("$.meta.stage_order[2]").value("TOOL"))
+                .andExpect(jsonPath("$.meta.stage_order[3]").value("GUARD"))
+                .andExpect(jsonPath("$.meta.stage_order[4]").value("WRITE"))
+                .andExpect(jsonPath("$.tool.required").value(true))
+                .andExpect(jsonPath("$.tool.used").value(true))
+                .andExpect(jsonPath("$.tool.outcome").value(EvalToolStageRunner.OUTCOME_OK))
+                .andExpect(jsonPath("$.meta.tool_calls_count").value(1))
+                .andExpect(jsonPath("$.meta.tool_outcome").value(EvalToolStageRunner.OUTCOME_OK))
+                .andExpect(jsonPath("$.meta.policy_events[*].policy_type", hasItem("tool_stage")));
+    }
+
     /**
      * Day6 证据：工具超时 — HTTP 200，{@code error_code=TOOL_TIMEOUT}，正常结束。
      */
@@ -449,6 +476,28 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.tool_calls_count").value(1))
                 .andExpect(jsonPath("$.meta.tool_outcome").value(EvalToolStageRunner.OUTCOME_TIMEOUT))
                 .andExpect(jsonPath("$.meta.tool_latency_ms").isNumber());
+    }
+
+    @Test
+    void marketDataExplain_evalToolTimeout_degradesWithToolTimeout() throws Exception {
+        String body = """
+                {
+                  "query": "解释一下 AAPL 的 price 和成交量",
+                  "mode": "AGENT",
+                  "eval_tool_scenario": "timeout"
+                }
+                """;
+        mockMvc.perform(post("/api/v1/eval/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.answer").isString())
+                .andExpect(jsonPath("$.meta").exists())
+                .andExpect(jsonPath("$.tool.succeeded").value(false))
+                .andExpect(jsonPath("$.tool.outcome").value(EvalToolStageRunner.OUTCOME_TIMEOUT))
+                .andExpect(jsonPath("$.error_code").value(EvalToolStageRunner.ERROR_CODE_TOOL_TIMEOUT))
+                .andExpect(jsonPath("$.meta.tool_outcome").value(EvalToolStageRunner.OUTCOME_TIMEOUT))
+                .andExpect(jsonPath("$.meta.policy_events[*].policy_type", hasItem("tool_stage")));
     }
 
     /**

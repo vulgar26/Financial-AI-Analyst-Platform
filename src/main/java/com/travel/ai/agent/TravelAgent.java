@@ -2,6 +2,7 @@ package com.travel.ai.agent;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import com.travel.ai.agent.guard.RetrieveEmptyHitGate;
+import com.travel.ai.agent.guard.ToolPrefacePayload;
 import com.travel.ai.agent.plan.MainLinePlanProposer;
 import com.travel.ai.config.AppAgentProperties;
 import com.travel.ai.profile.ProfileExtractionCoordinator;
@@ -38,6 +39,7 @@ import com.travel.ai.runtime.PlanParseEvent;
 import com.travel.ai.runtime.PolicyStageAnchor;
 import com.travel.ai.runtime.SseControlEvent;
 import com.travel.ai.tools.GovernedAgentTool;
+import com.travel.ai.web.RequestTraceFilter;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -45,7 +47,6 @@ import java.util.concurrent.TimeoutException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -187,8 +188,7 @@ public class TravelAgent implements FinancialAnalystAgent {
      */
     @Override
     public Flux<ServerSentEvent<String>> chat(String conversationId, String userMessage) {
-        String requestId = UUID.randomUUID().toString();
-        MDC.put("requestId", requestId);
+        String requestId = RequestTraceFilter.currentRequestIdOrNew();
 
         int agentMaxSteps = appAgentProperties.getMaxSteps();
         Duration agentTotalTimeout = appAgentProperties.getTotalTimeout();
@@ -455,7 +455,26 @@ public class TravelAgent implements FinancialAnalystAgent {
         String planBlock = (ctx.planJson != null && !ctx.planJson.isBlank())
                 ? "【本轮执行计划（结构化，须遵守）】\n" + ctx.planJson + "\n\n"
                 : "";
-        ctx.finalPromptForLlm = profileBlock + ctx.toolPreface + planBlock + ctx.promptBase;
+        String financeOutputGuardBlock = shouldApplyMarketDataOutputGuard(ctx.toolPreface)
+                ? """
+                【金融输出约束】
+                - 本轮行情/市场数据来自本地 mock，不是实时数据。
+                - 这些数据不可用于交易决策，最终回答中必须包含“不可用于交易决策”或“不能作为交易依据”。
+                - 不得输出买入、卖出、持有、仓位、止盈止损等交易建议。
+                - 回答结尾必须说明：内容仅供研究和教育参考，不构成投资建议。
+
+                """
+                : "";
+        ctx.finalPromptForLlm = profileBlock + ctx.toolPreface + financeOutputGuardBlock + planBlock + ctx.promptBase;
+    }
+
+    private static boolean shouldApplyMarketDataOutputGuard(String toolPreface) {
+        if (toolPreface == null || toolPreface.isBlank()) {
+            return false;
+        }
+        return toolPreface.contains("name=market_data")
+                || toolPreface.contains("mockMode=true")
+                || toolPreface.contains("mock_market_data=true");
     }
 
     private void logStageBoundary(StageName stage, long startNs, MainAgentTurnContext ctx) {
@@ -770,17 +789,21 @@ public class TravelAgent implements FinancialAnalystAgent {
         ctx.skipLlmForEmptyHits = d.skipLlm();
         ctx.emptyHitsClarifyBody = d.clarifyBody() != null ? d.clarifyBody() : "";
         ctx.emptyHitsGateLogCode = d.skipGateErrorCode();
-        if (d.skipGateErrorCode() != null && !d.skipGateErrorCode().isBlank()) {
-            String behavior = d.skipLlm() ? "clarify" : "answer";
-            ctx.policyEvents.add(PolicyEvent.of(
-                    "rag_gate",
-                    PolicyStageAnchor.POST_RETRIEVE.wireValue(),
-                    behavior,
-                    d.reason() != null ? d.reason().name().toLowerCase(java.util.Locale.ROOT) : null,
-                    d.skipGateErrorCode(),
-                    ctx.requestId
-            ));
-        }
+        String reason = d.reason() != null ? d.reason().name().toLowerCase(java.util.Locale.ROOT) : "";
+        String behavior = d.skipLlm() ? "clarify" : "answer";
+        ctx.policyEvents.add(PolicyEvent.of(
+                        "rag_gate",
+                        PolicyStageAnchor.POST_RETRIEVE.wireValue(),
+                        behavior,
+                        reason,
+                        d.skipGateErrorCode(),
+                        ctx.requestId
+                )
+                .withAttr("retrieve_hit_count", String.valueOf(ctx.docs != null ? ctx.docs.size() : 0))
+                .withAttr("tool_payload_present", String.valueOf(ToolPrefacePayload.hasSubstantiveBody(ctx.toolPreface)))
+                .withAttr("empty_hits_behavior", emptyHitsBehavior != null ? emptyHitsBehavior : "")
+                .withAttr("skip_llm", String.valueOf(d.skipLlm()))
+                .withAttr("reason", reason));
         switch (d.reason()) {
             case APPLIED_CLARIFY_RAG_EMPTY, APPLIED_CLARIFY_TOOL_NO_PAYLOAD -> log.info(
                     "[guard] empty_hits gate=clarify error_code={} requestId={}",
