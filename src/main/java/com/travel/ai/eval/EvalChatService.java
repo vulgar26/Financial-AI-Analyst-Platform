@@ -552,13 +552,14 @@ public class EvalChatService {
             }
         }
 
+        final EvalCheckpointRow checkpointRowForToolReuse = matchedCheckpointRow;
         AtomicReference<EvalToolStageRunner.EvalToolInvocationResult> toolSlot = new AtomicReference<>();
         int resumeIdx = checkpointResumeLastInclusiveIndex == null ? -1 : checkpointResumeLastInclusiveIndex;
         List<String> stageOrder = EvalLinearAgentPipeline.runStubStagesResumingAfterIndex(request, physical, resumeIdx, () -> {
             if (toolSlot.get() != null) {
                 return;
             }
-            ReuseAttempt<EvalToolStageRunner.EvalToolInvocationResult> reuse = tryReuseToolFromCheckpoint(matchedCheckpointRow, request);
+            ReuseAttempt<EvalToolStageRunner.EvalToolInvocationResult> reuse = tryReuseToolFromCheckpoint(checkpointRowForToolReuse, request);
             if (reuse.reused() != null) {
                 toolSlot.set(reuse.reused());
                 meta.setCheckpointToolReused(true);
@@ -798,7 +799,7 @@ public class EvalChatService {
             detail.put("eval_tool_scenario", request.getEvalToolScenario().trim());
         }
         if (response.getTool() != null) {
-            detail.put("tool_used", response.getTool().getUsed());
+            detail.put("tool_used", response.getTool().isUsed());
             detail.put("tool_name", response.getTool().getName());
             detail.put("tool_outcome", response.getTool().getOutcome());
             detail.put("tool_succeeded", response.getTool().getSucceeded());
