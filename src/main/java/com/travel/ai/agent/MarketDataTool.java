@@ -17,6 +17,9 @@ import java.util.regex.Pattern;
 public class MarketDataTool implements GovernedAgentTool {
 
     private static final Pattern PE_TOKEN_PATTERN = Pattern.compile("(^|[^a-z0-9])pe([^a-z0-9]|$)");
+    private static final java.util.Set<String> TICKER_STOP_WORDS = java.util.Set.of(
+            "WHAT", "IS", "THE", "FOR", "AND", "OR", "PRICE", "QUOTE", "VOLUME", "MARKET", "TICKER", "EXPLAIN"
+    );
 
     @Override
     public String name() {
@@ -51,7 +54,7 @@ public class MarketDataTool implements GovernedAgentTool {
         }
         String upper = userMessage.toUpperCase(Locale.ROOT);
         for (String token : upper.split("[^A-Z0-9.]+")) {
-            if (token.matches("[A-Z]{1,5}(\\.[A-Z]{1,3})?")) {
+            if (token.matches("[A-Z]{1,5}(\\.[A-Z]{1,3})?") && !TICKER_STOP_WORDS.contains(token)) {
                 return token;
             }
         }
