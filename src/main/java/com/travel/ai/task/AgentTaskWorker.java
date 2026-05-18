@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -39,24 +40,38 @@ public class AgentTaskWorker {
             return;
         }
         try {
-            int recovered = repository.recoverExpiredLeases();
-            if (recovered > 0) {
-                log.info("[agent-task] recovered_expired_leases count={}", recovered);
+            List<AgentTaskRow> recovered = repository.recoverExpiredLeases(workerId);
+            if (!recovered.isEmpty()) {
+                for (AgentTaskRow row : recovered) {
+                    log.info("[agent-task] event=lease_recovered task_id={} request_id={} worker_id={} task_type={} status={} retry_count={} latency_ms=0",
+                            row.taskId(), row.requestId(), workerId, row.taskType(), row.status(), row.retryCount());
+                }
             }
             List<AgentTaskRow> tasks = repository.claimDueTasks(
                     workerId,
                     properties.getWorker().getLeaseSeconds(),
                     properties.getWorker().getBatchSize());
             for (AgentTaskRow task : tasks) {
+                log.info("[agent-task] event=task_claimed task_id={} request_id={} worker_id={} task_type={} status={} retry_count={} latency_ms=0",
+                        task.taskId(), task.requestId(), workerId, task.taskType(), task.status(), task.retryCount());
+            }
+            for (AgentTaskRow task : tasks) {
                 runOne(task);
             }
         } catch (Exception e) {
-            log.warn("[agent-task] worker_tick_failed err={}", e.toString());
+            log.warn("[agent-task] event=worker_tick_failed worker_id={} err={}", workerId, e.toString());
         }
     }
 
     private void runOne(AgentTaskRow task) {
+        long startNs = System.nanoTime();
+        String previousRequestId = MDC.get("requestId");
+        if (task.requestId() != null && !task.requestId().isBlank()) {
+            MDC.put("requestId", task.requestId());
+        }
         try {
+            log.info("[agent-task] event=task_started task_id={} request_id={} worker_id={} task_type={} status={} retry_count={} latency_ms=0",
+                    task.taskId(), task.requestId(), workerId, task.taskType(), task.status(), task.retryCount());
             if (task.taskType() != AgentTaskType.ANALYSIS_REPORT_MOCK) {
                 throw new IllegalArgumentException("unsupported task_type: " + task.taskType());
             }
@@ -71,12 +86,27 @@ public class AgentTaskWorker {
             result.put("mock_data", true);
             result.put("real_financial_api_used", false);
             result.put("trading_capability_used", false);
-            repository.markSucceeded(task.taskId(), result);
-            log.info("[agent-task] task_succeeded taskId={} type={}", task.taskId(), task.taskType());
+            long latencyMs = elapsedMs(startNs);
+            repository.markSucceeded(task.taskId(), result, workerId, latencyMs);
+            log.info("[agent-task] event=task_succeeded task_id={} request_id={} worker_id={} task_type={} status=SUCCEEDED retry_count={} latency_ms={}",
+                    task.taskId(), task.requestId(), workerId, task.taskType(), task.retryCount(), latencyMs);
         } catch (Exception e) {
-            repository.markFailedOrRetry(task.taskId(), e.toString());
-            log.warn("[agent-task] task_failed_or_retry taskId={} err={}", task.taskId(), e.toString());
+            long latencyMs = elapsedMs(startNs);
+            AgentTaskRow updated = repository.markFailedOrRetry(task.taskId(), e.toString(), workerId, latencyMs)
+                    .orElse(task);
+            log.warn("[agent-task] event=task_failed_or_retry task_id={} request_id={} worker_id={} task_type={} status={} retry_count={} latency_ms={} err={}",
+                    task.taskId(), task.requestId(), workerId, task.taskType(), updated.status(), updated.retryCount(), latencyMs, e.toString());
+        } finally {
+            if (previousRequestId != null && !previousRequestId.isBlank()) {
+                MDC.put("requestId", previousRequestId);
+            } else {
+                MDC.remove("requestId");
+            }
         }
+    }
+
+    private static long elapsedMs(long startNs) {
+        return (System.nanoTime() - startNs) / 1_000_000L;
     }
 
     private static String buildWorkerId() {
@@ -88,4 +118,3 @@ public class AgentTaskWorker {
         return host + ":" + ManagementFactory.getRuntimeMXBean().getName() + ":" + UUID.randomUUID();
     }
 }
-

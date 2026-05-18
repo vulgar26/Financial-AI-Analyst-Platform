@@ -2,6 +2,7 @@ package com.travel.ai.task;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.travel.ai.controller.dto.AgentTaskCreateRequest;
+import com.travel.ai.web.RequestTraceFilter;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -22,6 +23,7 @@ public class AgentTaskService {
 
     public AgentTaskRow create(AgentTaskCreateRequest request) {
         String userId = currentUser();
+        String requestId = RequestTraceFilter.currentRequestIdOrNew();
         AgentTaskType taskType = parseType(request != null ? request.getTaskType() : null);
         String idempotencyKey = request != null ? request.getIdempotencyKey() : null;
         JsonNode payload = request != null ? request.getPayload() : null;
@@ -38,6 +40,7 @@ public class AgentTaskService {
             return repository.insert(
                     taskId,
                     userId,
+                    requestId,
                     taskType,
                     idempotencyKey,
                     payload,
@@ -74,4 +77,3 @@ public class AgentTaskService {
         return authentication != null ? authentication.getName() : "anonymous";
     }
 }
-

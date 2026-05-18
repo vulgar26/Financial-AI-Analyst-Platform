@@ -26,6 +26,7 @@ public class AgentTaskJdbcRepository {
     public AgentTaskRow insert(
             UUID taskId,
             String userId,
+            String requestId,
             AgentTaskType taskType,
             String idempotencyKey,
             JsonNode payload,
@@ -33,13 +34,14 @@ public class AgentTaskJdbcRepository {
     ) {
         jdbcTemplate.update("""
                         INSERT INTO agent_task (
-                            task_id, user_id, task_type, idempotency_key, status,
+                            task_id, request_id, user_id, task_type, idempotency_key, status,
                             payload_json, retry_count, max_retries, next_run_at,
                             created_at, updated_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?::jsonb, 0, ?, now(), now(), now())
+                        VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, 0, ?, now(), now(), now())
                         """,
                 taskId,
+                blankToNull(requestId),
                 userId,
                 taskType.name(),
                 blankToNull(idempotencyKey),
@@ -105,7 +107,7 @@ public class AgentTaskJdbcRepository {
                     leaseOwner,
                     Math.max(1L, leaseSeconds),
                     id);
-            insertEvent(id, "TASK_RUNNING", objectMapper.createObjectNode().put("lease_owner", leaseOwner));
+            insertEvent(id, "TASK_RUNNING", objectMapper.createObjectNode().put("worker_id", leaseOwner));
         }
         return ids.stream()
                 .map(this::findByTaskId)
@@ -113,7 +115,7 @@ public class AgentTaskJdbcRepository {
                 .toList();
     }
 
-    public Optional<AgentTaskRow> markSucceeded(UUID taskId, JsonNode result) {
+    public Optional<AgentTaskRow> markSucceeded(UUID taskId, JsonNode result, String workerId, long latencyMs) {
         jdbcTemplate.update("""
                         UPDATE agent_task
                         SET status = 'SUCCEEDED',
@@ -127,11 +129,13 @@ public class AgentTaskJdbcRepository {
                         """,
                 toJson(result),
                 taskId);
-        insertEvent(taskId, "TASK_SUCCEEDED", objectMapper.createObjectNode());
+        insertEvent(taskId, "TASK_SUCCEEDED", objectMapper.createObjectNode()
+                .put("worker_id", workerId)
+                .put("latency_ms", latencyMs));
         return findByTaskId(taskId);
     }
 
-    public Optional<AgentTaskRow> markFailedOrRetry(UUID taskId, String errorMessage) {
+    public Optional<AgentTaskRow> markFailedOrRetry(UUID taskId, String errorMessage, String workerId, long latencyMs) {
         AgentTaskRow row = findByTaskId(taskId).orElseThrow(() -> new IllegalArgumentException("task not found: " + taskId));
         boolean retry = row.retryCount() < row.maxRetries();
         if (retry) {
@@ -152,6 +156,8 @@ public class AgentTaskJdbcRepository {
                     backoffSeconds,
                     taskId);
             insertEvent(taskId, "TASK_RETRY", objectMapper.createObjectNode()
+                    .put("worker_id", workerId)
+                    .put("latency_ms", latencyMs)
                     .put("error_message", truncate(errorMessage))
                     .put("backoff_seconds", backoffSeconds));
         } else {
@@ -167,7 +173,10 @@ public class AgentTaskJdbcRepository {
                             """,
                     truncate(errorMessage),
                     taskId);
-            insertEvent(taskId, "TASK_FAILED", objectMapper.createObjectNode().put("error_message", truncate(errorMessage)));
+            insertEvent(taskId, "TASK_FAILED", objectMapper.createObjectNode()
+                    .put("worker_id", workerId)
+                    .put("latency_ms", latencyMs)
+                    .put("error_message", truncate(errorMessage)));
         }
         return findByTaskId(taskId);
     }
@@ -191,7 +200,7 @@ public class AgentTaskJdbcRepository {
         return updated;
     }
 
-    public int recoverExpiredLeases() {
+    public List<AgentTaskRow> recoverExpiredLeases(String workerId) {
         List<UUID> expired = jdbcTemplate.query("""
                         SELECT task_id
                         FROM agent_task
@@ -199,7 +208,7 @@ public class AgentTaskJdbcRepository {
                           AND lease_until < now()
                         """,
                 (rs, rowNum) -> (UUID) rs.getObject("task_id"));
-        int total = 0;
+        List<AgentTaskRow> recoveredRows = new java.util.ArrayList<>();
         for (UUID taskId : expired) {
             AgentTaskRow row = findByTaskId(taskId).orElse(null);
             if (row == null) {
@@ -207,7 +216,7 @@ public class AgentTaskJdbcRepository {
             }
             boolean retry = row.retryCount() < row.maxRetries();
             if (retry) {
-                total += jdbcTemplate.update("""
+                int updated = jdbcTemplate.update("""
                                 UPDATE agent_task
                                 SET status = 'PENDING',
                                     retry_count = retry_count + 1,
@@ -221,9 +230,13 @@ public class AgentTaskJdbcRepository {
                                   AND lease_until < now()
                                 """,
                         taskId);
-                insertEvent(taskId, "TASK_LEASE_EXPIRED_RETRY", objectMapper.createObjectNode());
+                if (updated > 0) {
+                    insertEvent(taskId, "TASK_LEASE_EXPIRED_RETRY", objectMapper.createObjectNode()
+                            .put("worker_id", workerId));
+                    findByTaskId(taskId).ifPresent(recoveredRows::add);
+                }
             } else {
-                total += jdbcTemplate.update("""
+                int updated = jdbcTemplate.update("""
                                 UPDATE agent_task
                                 SET status = 'FAILED',
                                     error_message = 'task lease expired',
@@ -235,10 +248,14 @@ public class AgentTaskJdbcRepository {
                                   AND lease_until < now()
                                 """,
                         taskId);
-                insertEvent(taskId, "TASK_LEASE_EXPIRED_FAILED", objectMapper.createObjectNode());
+                if (updated > 0) {
+                    insertEvent(taskId, "TASK_LEASE_EXPIRED_FAILED", objectMapper.createObjectNode()
+                            .put("worker_id", workerId));
+                    findByTaskId(taskId).ifPresent(recoveredRows::add);
+                }
             }
         }
-        return total;
+        return recoveredRows;
     }
 
     private Optional<AgentTaskRow> queryOne(String sql, Object... args) {
@@ -255,6 +272,7 @@ public class AgentTaskJdbcRepository {
                 String result = rs.getString("result_json");
                 return new AgentTaskRow(
                         (UUID) rs.getObject("task_id"),
+                        rs.getString("request_id"),
                         rs.getString("user_id"),
                         AgentTaskType.valueOf(rs.getString("task_type")),
                         rs.getString("idempotency_key"),
@@ -282,6 +300,17 @@ public class AgentTaskJdbcRepository {
             return;
         }
         try {
+            com.fasterxml.jackson.databind.node.ObjectNode enriched = objectMapper.createObjectNode();
+            if (event != null && event.isObject()) {
+                enriched.setAll((com.fasterxml.jackson.databind.node.ObjectNode) event);
+            }
+            if (row.requestId() != null && !row.requestId().isBlank()) {
+                enriched.put("request_id", row.requestId());
+            }
+            enriched.put("task_id", String.valueOf(row.taskId()));
+            enriched.put("task_type", row.taskType().name());
+            enriched.put("status", row.status().name());
+            enriched.put("retry_count", row.retryCount());
             jdbcTemplate.update("""
                             INSERT INTO agent_task_event (event_id, task_id, user_id, event_type, event_json, created_at)
                             VALUES (?, ?, ?, ?, ?::jsonb, now())
@@ -290,7 +319,7 @@ public class AgentTaskJdbcRepository {
                     taskId,
                     row.userId(),
                     eventType,
-                    toJson(event));
+                    toJson(enriched));
         } catch (DataAccessException ignored) {
             // Task state is authoritative; event logging is best-effort in V1.
         }

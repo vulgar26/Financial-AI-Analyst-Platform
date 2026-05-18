@@ -43,6 +43,13 @@
 
 未接入 Micrometer/Prometheus 时，用上述日志即可做本机对比与慢请求粗定位。
 
+### 3.1 Request trace and guard policy fields
+
+- `RequestTraceFilter` reads `X-Request-Id`; if it is missing, the server generates a UUID. The value is written to MDC as `requestId` and echoed in the response header `X-Request-Id`.
+- `TravelAgent` reuses the current MDC `requestId` when present, and still writes the same id explicitly into SSE `request_id` fields. This is important for reactive/SSE paths where thread-local MDC alone is not enough.
+- Trace join path: HTTP `X-Request-Id` -> SSE `request_id` (`plan_parse`, `stage`, `policy`, `done/error`) -> `agent_task.request_id` -> async worker logs and `agent_task_event.event_json`.
+- `rag_gate` policy events are emitted on every GUARD execution. `attrs` include `retrieve_hit_count`, `tool_payload_present`, `empty_hits_behavior`, `skip_llm`, and `reason`. `error_code` remains reserved for actual gate/skip outcomes such as `RETRIEVE_EMPTY` or `TOOL_NO_USABLE_PAYLOAD`.
+
 ## 4. 相关源码入口
 
 - 对话 SSE 入口：`src/main/java/com/travel/ai/controller/TravelController.java`

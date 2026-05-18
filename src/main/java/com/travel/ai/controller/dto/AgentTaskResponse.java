@@ -13,6 +13,8 @@ public class AgentTaskResponse {
 
     @JsonProperty("task_id")
     private UUID taskId;
+    @JsonProperty("request_id")
+    private String requestId;
     @JsonProperty("user_id")
     private String userId;
     @JsonProperty("task_type")
@@ -34,6 +36,7 @@ public class AgentTaskResponse {
     public static AgentTaskResponse from(AgentTaskRow row) {
         AgentTaskResponse r = new AgentTaskResponse();
         r.taskId = row.taskId();
+        r.requestId = row.requestId();
         r.userId = row.userId();
         r.taskType = row.taskType().name();
         r.status = row.status().name();
@@ -49,6 +52,10 @@ public class AgentTaskResponse {
 
     public UUID getTaskId() {
         return taskId;
+    }
+
+    public String getRequestId() {
+        return requestId;
     }
 
     public String getUserId() {
@@ -91,4 +98,3 @@ public class AgentTaskResponse {
         return updatedAt;
     }
 }
-

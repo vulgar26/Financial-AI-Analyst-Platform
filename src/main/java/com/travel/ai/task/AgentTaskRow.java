@@ -7,6 +7,7 @@ import java.util.UUID;
 
 public record AgentTaskRow(
         UUID taskId,
+        String requestId,
         String userId,
         AgentTaskType taskType,
         String idempotencyKey,
@@ -23,4 +24,3 @@ public record AgentTaskRow(
         OffsetDateTime updatedAt
 ) {
 }
-
