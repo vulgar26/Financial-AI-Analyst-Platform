@@ -15,6 +15,7 @@ public class AppAgentProperties {
     private Duration toolTimeout = Duration.ofSeconds(3);
     private Duration llmStreamTimeout = Duration.ofSeconds(20);
     private PlanStage planStage = new PlanStage();
+    private WorkflowRuntime workflowRuntime = new WorkflowRuntime();
 
     public Duration getTotalTimeout() {
         return totalTimeout != null ? totalTimeout : Duration.ofSeconds(120);
@@ -59,9 +60,33 @@ public class AppAgentProperties {
         this.planStage = planStage != null ? planStage : new PlanStage();
     }
 
+    public WorkflowRuntime getWorkflowRuntime() {
+        if (workflowRuntime == null) {
+            workflowRuntime = new WorkflowRuntime();
+        }
+        return workflowRuntime;
+    }
+
+    public void setWorkflowRuntime(WorkflowRuntime workflowRuntime) {
+        this.workflowRuntime = workflowRuntime != null ? workflowRuntime : new WorkflowRuntime();
+    }
+
     /** 嵌套绑定 {@code app.agent.plan-stage.enabled} */
     public static class PlanStage {
         private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+    }
+
+    /** Feature flag for the Phase R2 LinearWorkflowRuntime wrapper. Default is off. */
+    public static class WorkflowRuntime {
+        private boolean enabled = false;
 
         public boolean isEnabled() {
             return enabled;

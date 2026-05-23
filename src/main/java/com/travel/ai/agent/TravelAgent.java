@@ -38,6 +38,13 @@ import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.runtime.PlanParseEvent;
 import com.travel.ai.runtime.PolicyStageAnchor;
 import com.travel.ai.runtime.SseControlEvent;
+import com.travel.ai.runtime.LinearWorkflowRuntime;
+import com.travel.ai.runtime.model.NodeResult;
+import com.travel.ai.runtime.model.NodeStatus;
+import com.travel.ai.runtime.model.WorkflowContext;
+import com.travel.ai.runtime.model.WorkflowTask;
+import com.travel.ai.runtime.node.WorkflowNode;
+import com.travel.ai.runtime.trace.StageTrace;
 import com.travel.ai.tools.GovernedAgentTool;
 import com.travel.ai.web.RequestTraceFilter;
 
@@ -108,6 +115,7 @@ public class TravelAgent implements FinancialAnalystAgent {
     private final AppAgentProperties appAgentProperties;
     private final UserProfileService userProfileService;
     private final ProfileExtractionCoordinator profileExtractionCoordinator;
+    private final LinearWorkflowRuntime linearWorkflowRuntime = new LinearWorkflowRuntime();
 
     @Value("${app.tools.weather.enabled:true}")
     private boolean weatherToolEnabled;
@@ -226,7 +234,11 @@ public class TravelAgent implements FinancialAnalystAgent {
 
         MainAgentTurnContext ctx = new MainAgentTurnContext(conversationId, userMessage, requestId);
         try {
-            runLinearStages(ctx);
+            if (shouldUseWorkflowRuntime(appAgentProperties)) {
+                runLinearStagesWithRuntime(ctx);
+            } else {
+                runLinearStages(ctx);
+            }
         } catch (Exception e) {
             log.error("[agent] pipeline_failed requestId={} err={}", requestId, e.toString());
             Flux<ServerSentEvent<String>> err = Flux.just(ServerSentEvent.<String>builder()
@@ -417,10 +429,106 @@ public class TravelAgent implements FinancialAnalystAgent {
         }
     }
 
+    private void runLinearStagesWithRuntime(MainAgentTurnContext ctx) {
+        WorkflowTask task = WorkflowTask.of(
+                "finance_analyst_chat",
+                "v1",
+                "finance",
+                ctx.requestId,
+                ctx.conversationId,
+                ctx.userMessage
+        );
+        WorkflowContext runtimeCtx = linearWorkflowRuntime.run(task, List.of(
+                new PlanStageNode(ctx),
+                new RetrieveStageNode(ctx),
+                new ToolStageNode(ctx),
+                new GuardStageNode(ctx)
+        ));
+        ctx.stageEvents.addAll(toStageEventsForRuntime(runtimeCtx.getStageTraces(), ctx.requestId));
+        StageTrace failed = firstFailedTrace(runtimeCtx.getStageTraces());
+        if (failed != null) {
+            throw new IllegalStateException("workflow runtime node failed: " + failed.stage()
+                    + (failed.message() != null && !failed.message().isBlank() ? " - " + failed.message() : ""));
+        }
+    }
+
+    static boolean shouldUseWorkflowRuntime(AppAgentProperties properties) {
+        return properties != null && properties.getWorkflowRuntime().isEnabled();
+    }
+
+    static List<StageEvent> toStageEventsForRuntime(List<StageTrace> traces, String requestId) {
+        if (traces == null || traces.isEmpty()) {
+            return List.of();
+        }
+        List<StageEvent> events = new ArrayList<>();
+        for (StageTrace trace : traces) {
+            StageName stage = parseStageName(trace.stage());
+            if (stage == null) {
+                continue;
+            }
+            NodeStatus status = trace.status();
+            if (status == NodeStatus.SKIPPED) {
+                events.add(StageEvent.skip(stage, requestId, skipReason(trace)));
+            } else if (status == NodeStatus.SUCCESS) {
+                events.add(StageEvent.start(stage, requestId));
+                events.add(StageEvent.end(stage, requestId, trace.elapsedMs() != null ? trace.elapsedMs() : 0L));
+            } else {
+                events.add(StageEvent.start(stage, requestId));
+                events.add(new StageEvent(
+                        com.travel.ai.runtime.StageEventKind.ERROR,
+                        stage,
+                        requestId,
+                        trace.elapsedMs(),
+                        trace.errorCode(),
+                        trace.message(),
+                        trace.attrs() != null ? trace.attrs() : Map.of()
+                ));
+            }
+        }
+        return events;
+    }
+
+    private static StageTrace firstFailedTrace(List<StageTrace> traces) {
+        if (traces == null) {
+            return null;
+        }
+        for (StageTrace trace : traces) {
+            if (trace != null && (trace.status() == NodeStatus.FAILED || trace.status() == NodeStatus.TIMEOUT)) {
+                return trace;
+            }
+        }
+        return null;
+    }
+
+    private static StageName parseStageName(String stage) {
+        if (stage == null || stage.isBlank()) {
+            return null;
+        }
+        try {
+            return StageName.valueOf(stage);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static String skipReason(StageTrace trace) {
+        if (trace != null && trace.attrs() != null) {
+            String reason = trace.attrs().get("reason");
+            if (reason != null && !reason.isBlank()) {
+                return reason;
+            }
+        }
+        return "skipped_by_plan";
+    }
+
     private void applyRetrieveSkipped(MainAgentTurnContext ctx) {
+        applyRetrieveSkippedState(ctx);
+        ctx.stageEvents.add(StageEvent.skip(StageName.RETRIEVE, ctx.requestId, "skipped_by_plan"));
+    }
+
+    private void applyRetrieveSkippedState(MainAgentTurnContext ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] RETRIEVE skipped_by_plan requestId={}", ctx.requestId);
-        ctx.stageEvents.add(StageEvent.skip(StageName.RETRIEVE, ctx.requestId, "skipped_by_plan"));
         ctx.queries = List.of();
         ctx.rewriteMs = 0;
         ctx.currentUser = org.springframework.security.core.context.SecurityContextHolder
@@ -444,9 +552,13 @@ public class TravelAgent implements FinancialAnalystAgent {
     }
 
     private void applyToolSkipped(MainAgentTurnContext ctx) {
+        applyToolSkippedState(ctx);
+        ctx.stageEvents.add(StageEvent.skip(StageName.TOOL, ctx.requestId, "skipped_by_plan"));
+    }
+
+    private void applyToolSkippedState(MainAgentTurnContext ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] TOOL skipped_by_plan requestId={}", ctx.requestId);
-        ctx.stageEvents.add(StageEvent.skip(StageName.TOOL, ctx.requestId, "skipped_by_plan"));
         ctx.toolPreface = "";
         mergeFinalPromptFromCtx(ctx);
         logStageBoundary(StageName.TOOL, t0, ctx);
@@ -957,6 +1069,114 @@ public class TravelAgent implements FinancialAnalystAgent {
      * 承载单轮对话在各阶段之间传递的状态（mutable context object）。
      * 术语：类似「请求作用域 DTO / turn state」，仅本类各 {@code stage*} 方法写入。
      */
+    private final class PlanStageNode implements WorkflowNode {
+        private final MainAgentTurnContext mainCtx;
+
+        private PlanStageNode(MainAgentTurnContext mainCtx) {
+            this.mainCtx = mainCtx;
+        }
+
+        @Override
+        public String name() {
+            return StageName.PLAN.name();
+        }
+
+        @Override
+        public NodeResult execute(WorkflowContext ctx) {
+            stagePlan(mainCtx);
+            PlanPhysicalStagePolicy.PhysicalStageFlags flags = physicalStageFlags(mainCtx);
+            ctx.putAttr("run_retrieve", String.valueOf(flags.runRetrieve()));
+            ctx.putAttr("run_tool", String.valueOf(flags.runTool()));
+            ctx.putAttr("run_guard", String.valueOf(flags.runGuard()));
+            log.info("[agent] physical_stages retrieve={} tool={} guard={} requestId={}",
+                    flags.runRetrieve(), flags.runTool(), flags.runGuard(), mainCtx.requestId);
+            return NodeResult.success();
+        }
+    }
+
+    private final class RetrieveStageNode implements WorkflowNode {
+        private final MainAgentTurnContext mainCtx;
+
+        private RetrieveStageNode(MainAgentTurnContext mainCtx) {
+            this.mainCtx = mainCtx;
+        }
+
+        @Override
+        public String name() {
+            return StageName.RETRIEVE.name();
+        }
+
+        @Override
+        public NodeResult execute(WorkflowContext ctx) {
+            if (!runFlag(ctx, "run_retrieve")) {
+                applyRetrieveSkippedState(mainCtx);
+                return NodeResult.skipped("skipped_by_plan", Map.of("reason", "skipped_by_plan"));
+            }
+            stageRetrieve(mainCtx);
+            return NodeResult.success();
+        }
+    }
+
+    private final class ToolStageNode implements WorkflowNode {
+        private final MainAgentTurnContext mainCtx;
+
+        private ToolStageNode(MainAgentTurnContext mainCtx) {
+            this.mainCtx = mainCtx;
+        }
+
+        @Override
+        public String name() {
+            return StageName.TOOL.name();
+        }
+
+        @Override
+        public NodeResult execute(WorkflowContext ctx) {
+            if (!runFlag(ctx, "run_tool")) {
+                applyToolSkippedState(mainCtx);
+                return NodeResult.skipped("skipped_by_plan", Map.of("reason", "skipped_by_plan"));
+            }
+            stageTool(mainCtx);
+            return NodeResult.success();
+        }
+    }
+
+    private final class GuardStageNode implements WorkflowNode {
+        private final MainAgentTurnContext mainCtx;
+
+        private GuardStageNode(MainAgentTurnContext mainCtx) {
+            this.mainCtx = mainCtx;
+        }
+
+        @Override
+        public String name() {
+            return StageName.GUARD.name();
+        }
+
+        @Override
+        public NodeResult execute(WorkflowContext ctx) {
+            if (!runFlag(ctx, "run_guard")) {
+                log.info("[stage] GUARD skipped_by_plan requestId={}", mainCtx.requestId);
+                return NodeResult.skipped("skipped_by_plan", Map.of("reason", "skipped_by_plan"));
+            }
+            stageGuard(mainCtx);
+            return NodeResult.success();
+        }
+    }
+
+    private PlanPhysicalStagePolicy.PhysicalStageFlags physicalStageFlags(MainAgentTurnContext ctx) {
+        PlanV1 planV1;
+        try {
+            planV1 = planParser.parse(ctx.planJson);
+        } catch (PlanParseException e) {
+            throw new IllegalStateException("plan must parse after PlanParseCoordinator", e);
+        }
+        return PlanPhysicalStagePolicy.resolve(planV1);
+    }
+
+    private static boolean runFlag(WorkflowContext ctx, String key) {
+        return Boolean.parseBoolean(ctx.getAttrs().getOrDefault(key, "false"));
+    }
+
     private static final class MainAgentTurnContext {
         final String conversationId;
         final String userMessage;

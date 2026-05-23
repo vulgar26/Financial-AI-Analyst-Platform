@@ -149,6 +149,8 @@ app:
     # 是否在带 conversation_id 的评测请求结束时 UPSERT eval_conversation_checkpoint（默认 true；失败只打日志）
     checkpoint-persistence-enabled: true
   agent:
+    workflow-runtime:
+      enabled: ${APP_AGENT_WORKFLOW_RUNTIME_ENABLED:false}
     plan-stage:
       # 主线 PLAN 是否调用 LLM 产出 JSON（集成测试默认关，见 application-test.yml）
       enabled: ${APP_AGENT_PLAN_STAGE_ENABLED:true}
