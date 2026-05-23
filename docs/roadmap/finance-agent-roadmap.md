@@ -12,7 +12,7 @@
 
 - `TravelAgent`、`TravelController`、`TravelChatRequest`、`TravelKnowledgeController`。
 - `/travel/chat/**`、`/travel/knowledge/**`、`/travel/profile/**`。
-- `SYSTEM_PROMPT`、`QueryRewriter` prompt、Plan prompt 中的出行、景点、交通、预算语义。
+- `SYSTEM_PROMPT`、`QueryRewriter` prompt、Plan prompt 中的金融研究、公司分析、风险因素、数据核验语义。
 - `WeatherTool` 作为旅行场景工具。
 - 前端文案、测试类名、README 项目叙事。
 
@@ -105,4 +105,3 @@ User / Frontend
 - 对实时或准实时市场数据必须标注 `as_of_time`、来源和延迟。
 - 对证据不足、RAG 空命中、工具失败、数据过期的场景必须澄清或降级。
 - 金融分析输出应默认包含风险提示和“非投资建议”声明。
-

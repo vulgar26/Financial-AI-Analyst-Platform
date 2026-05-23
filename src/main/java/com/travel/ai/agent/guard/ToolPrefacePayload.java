@@ -5,6 +5,8 @@ package com.travel.ai.agent.guard;
  * <p>
  * 用途：工具失败时仍可能带有 outcome/error 等元数据头，但 payload 为空；此时不应视为「已有工具数据」而放行 LLM 编造实时信息。
  */
+// Parses tool-observation blocks emitted by the finance analyst runtime.
+// The originating implementation is still the legacy-named TravelAgent class.
 public final class ToolPrefacePayload {
 
     private static final String DATA_START = "BEGIN_TOOL_DATA\n";

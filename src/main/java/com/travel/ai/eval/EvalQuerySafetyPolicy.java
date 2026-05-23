@@ -7,8 +7,9 @@ import java.util.Optional;
 /**
  * Day9：对 {@code query} 做<strong>确定性</strong>安全筛查（高置信句式/模板），在 plan 解析成功之后、RAG/工具之前短路。
  * <p>
- * 设计目标：对抗类请求归因稳定（固定 {@link EvalSafetyErrorCodes}），避免落到泛化 {@code UNKNOWN}；不误伤普通旅行规划问句。
+ * 设计目标：对抗类请求归因稳定（固定 {@link EvalSafetyErrorCodes}），避免落到泛化 {@code UNKNOWN}；不误伤普通金融研究问句。
  */
+// Designed for deterministic safety attribution without blocking ordinary finance research questions.
 public final class EvalQuerySafetyPolicy {
 
     /**

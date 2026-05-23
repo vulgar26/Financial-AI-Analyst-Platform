@@ -1,5 +1,7 @@
 # Finance AI Analyst Direction
 
+API naming: `/analysis/**` is the preferred API for new finance analyst clients. `/finance/**` is the finance-semantic alias. `/travel/**` is legacy-compatible only and should not be used by new code.
+
 ## 项目定位
 
 本项目的长期方向是 Financial AI Analyst Platform：面向金融研究、知识学习、新闻分析、财报/研报问答、市场数据解读和风险提示的 Agentic RAG 系统。
@@ -76,4 +78,3 @@
 ```text
 以下内容仅供研究和教育参考，不构成投资建议。市场有风险，决策需结合自身情况并咨询持牌专业人士。
 ```
-

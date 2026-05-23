@@ -16,6 +16,7 @@ import java.util.Map;
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+// Eval meta for the finance analyst target; historical travel-ai identifiers remain stable compatibility values.
 public class EvalChatMeta {
 
     /**

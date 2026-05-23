@@ -5,7 +5,7 @@ export default function KnowledgeUpload({ disabled, uploading, result, onUpload 
         <h2>知识上传</h2>
         <span className="badge">.txt</span>
       </div>
-      <p className="muted">上传旅行资料后，后端会按当前登录用户写入向量库，聊天时按用户隔离检索。</p>
+      <p className="muted">上传财报、研报、公告、新闻或研究笔记后，后端会按当前登录用户写入向量库，分析时按用户隔离检索。资料和工具结果需要人工复核。</p>
       <label className="file-picker">
         <span>选择知识文件</span>
         <input

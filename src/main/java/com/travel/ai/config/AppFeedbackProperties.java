@@ -14,8 +14,11 @@ public class AppFeedbackProperties {
     private int maxCommentChars = 2000;
 
     /**
-     * {@code GET /travel/feedback} 单页条数上限。
+     * Page-size limit for feedback listing.
+     * Preferred route: {@code GET /analysis/feedback}; finance alias: {@code GET /finance/feedback};
+     * legacy-compatible route: {@code GET /travel/feedback}.
      */
+    // Applies to preferred /analysis/feedback, /finance/feedback alias, and legacy-compatible /travel/feedback.
     private int maxPageSize = 100;
 
     public int getMaxCommentChars() {

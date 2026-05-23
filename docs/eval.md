@@ -99,7 +99,7 @@
 
 ### 与 SSE 主产品的关系
 
-- **主产品聊天 SSE**（**推荐** `POST /travel/chat/{id}` + JSON `query`；`GET …?query=` 仍兼容）当前**不**逐字复刻上述评测专用门控；本表用于 **eval 批跑 / 数据集对齐** 与「对抗样例覆盖」留痕。  
+- **主产品聊天 SSE**（**推荐** `POST /analysis/chat/{id}` + JSON `query`；`/finance/chat/{id}` 为金融语义 alias；`/travel/chat/{id}` 为 legacy-compatible endpoint；`GET …?query=` 仍兼容）当前**不**逐字复刻上述评测专用门控；本表用于 **eval 批跑 / 数据集对齐** 与「对抗样例覆盖」留痕。  
 - 单测锚点：`EvalChatControllerTest`（Day7 RAG、`day9_datasetCase_*` 等）。
 
 ---

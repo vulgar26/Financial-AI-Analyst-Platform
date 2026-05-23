@@ -43,14 +43,14 @@ export async function login(username, password) {
   })
 }
 
-export async function createConversation(token) {
-  return requestJson('/travel/conversations', {
+export async function createAnalysisConversation(token) {
+  return requestJson('/analysis/conversations', {
     method: 'POST',
     headers: authHeaders(token),
   })
 }
 
-export async function uploadKnowledge(token, file) {
+export async function uploadAnalysisKnowledge(token, file) {
   const form = new FormData()
   form.append('file', file)
   return requestJson('/knowledge/upload', {
@@ -60,14 +60,14 @@ export async function uploadKnowledge(token, file) {
   })
 }
 
-export async function listKnowledge(token) {
-  return requestJson('/travel/knowledge', {
+export async function listAnalysisKnowledge(token) {
+  return requestJson('/analysis/knowledge', {
     headers: authHeaders(token),
   })
 }
 
-export async function deleteKnowledge(token, fileId) {
-  await fetch(`${API_BASE}/travel/knowledge/${encodeURIComponent(fileId)}`, {
+export async function deleteAnalysisKnowledge(token, fileId) {
+  await fetch(`${API_BASE}/analysis/knowledge/${encodeURIComponent(fileId)}`, {
     method: 'DELETE',
     headers: authHeaders(token),
   }).then(async (response) => {
@@ -81,17 +81,17 @@ export async function deleteKnowledge(token, fileId) {
   })
 }
 
-export async function getProfile(token) {
-  return requestJson('/travel/profile', {
+export async function getAnalysisProfile(token) {
+  return requestJson('/analysis/profile', {
     headers: authHeaders(token),
   })
 }
 
-export async function resetProfile(token, conversationId, clearChatMemory = false) {
+export async function resetAnalysisProfile(token, conversationId, clearChatMemory = false) {
   const params = new URLSearchParams()
   params.set('clearChatMemory', String(clearChatMemory))
   if (conversationId) params.set('conversationId', conversationId)
-  await fetch(`${API_BASE}/travel/profile?${params.toString()}`, {
+  await fetch(`${API_BASE}/analysis/profile?${params.toString()}`, {
     method: 'DELETE',
     headers: authHeaders(token),
   }).then(async (response) => {
@@ -102,30 +102,30 @@ export async function resetProfile(token, conversationId, clearChatMemory = fals
   })
 }
 
-export async function extractProfileSuggestion(token, conversationId, saveAsPending = true) {
-  return requestJson('/travel/profile/extract-suggestion', {
+export async function extractAnalysisProfileSuggestion(token, conversationId, saveAsPending = true) {
+  return requestJson('/analysis/profile/extract-suggestion', {
     method: 'POST',
     headers: authHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ conversationId, saveAsPending }),
   })
 }
 
-export async function getPendingProfile(token, conversationId) {
-  return requestJson(`/travel/profile/pending-extraction?conversationId=${encodeURIComponent(conversationId)}`, {
+export async function getPendingAnalysisProfile(token, conversationId) {
+  return requestJson(`/analysis/profile/pending-extraction?conversationId=${encodeURIComponent(conversationId)}`, {
     headers: authHeaders(token),
   })
 }
 
-export async function confirmPendingProfile(token, conversationId) {
-  return requestJson('/travel/profile/confirm-extraction', {
+export async function confirmPendingAnalysisProfile(token, conversationId) {
+  return requestJson('/analysis/profile/confirm-extraction', {
     method: 'POST',
     headers: authHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ conversationId }),
   })
 }
 
-export async function discardPendingProfile(token, conversationId) {
-  await fetch(`${API_BASE}/travel/profile/pending-extraction?conversationId=${encodeURIComponent(conversationId)}`, {
+export async function discardPendingAnalysisProfile(token, conversationId) {
+  await fetch(`${API_BASE}/analysis/profile/pending-extraction?conversationId=${encodeURIComponent(conversationId)}`, {
     method: 'DELETE',
     headers: authHeaders(token),
   }).then(async (response) => {
@@ -136,22 +136,22 @@ export async function discardPendingProfile(token, conversationId) {
   })
 }
 
-export async function submitFeedback(token, payload) {
-  return requestJson('/travel/feedback', {
+export async function submitAnalysisFeedback(token, payload) {
+  return requestJson('/analysis/feedback', {
     method: 'POST',
     headers: authHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
   })
 }
 
-export async function listFeedback(token, limit = 5) {
-  return requestJson(`/travel/feedback?limit=${limit}&offset=0`, {
+export async function listAnalysisFeedback(token, limit = 5) {
+  return requestJson(`/analysis/feedback?limit=${limit}&offset=0`, {
     headers: authHeaders(token),
   })
 }
 
-export async function streamChat(token, conversationId, query, handlers, signal) {
-  const response = await fetch(`${API_BASE}/travel/chat/${encodeURIComponent(conversationId)}`, {
+export async function streamAnalysisChat(token, conversationId, query, handlers, signal) {
+  const response = await fetch(`${API_BASE}/analysis/chat/${encodeURIComponent(conversationId)}`, {
     method: 'POST',
     headers: authHeaders(token, {
       Accept: 'text/event-stream',
@@ -174,6 +174,20 @@ export async function streamChat(token, conversationId, query, handlers, signal)
 
   await readSseStream(response, handlers)
 }
+
+export const createConversation = createAnalysisConversation
+export const uploadKnowledge = uploadAnalysisKnowledge
+export const listKnowledge = listAnalysisKnowledge
+export const deleteKnowledge = deleteAnalysisKnowledge
+export const getProfile = getAnalysisProfile
+export const resetProfile = resetAnalysisProfile
+export const extractProfileSuggestion = extractAnalysisProfileSuggestion
+export const getPendingProfile = getPendingAnalysisProfile
+export const confirmPendingProfile = confirmPendingAnalysisProfile
+export const discardPendingProfile = discardPendingAnalysisProfile
+export const submitFeedback = submitAnalysisFeedback
+export const listFeedback = listAnalysisFeedback
+export const streamChat = streamAnalysisChat
 
 async function readSseStream(response, handlers) {
   const reader = response.body.getReader()

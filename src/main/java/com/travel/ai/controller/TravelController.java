@@ -18,9 +18,10 @@ import reactor.core.publisher.Flux;
 import java.util.Map;
 
 /**
- * 出行 SSE 入口：仅委托 {@link TravelAgent}，不在此层保留未使用的 ChatClient.Builder（升级 P5-1）。
+ * Legacy-compatible SSE entrypoint for the finance analyst workflow.
  * <p>
- * 推荐 {@link #chatPost}（{@code POST} + JSON body）；{@link #chat}（{@code GET} + {@code query}）保留兼容并带 {@code Deprecation} 响应头。
+ * New clients should prefer {@code /analysis/**}; {@code /finance/**} is the finance-semantic alias.
+ * {@code /travel/**} remains available for existing clients.
  */
 @RestController
 @RequestMapping("/travel")
@@ -36,8 +37,9 @@ public class TravelController {
     private AppConversationProperties appConversationProperties;
 
     /**
-     * 服务端签发并登记 {@code conversationId}；生产在 {@code app.conversation.require-registration=true} 时，
-     * 客户端须先调用本接口再订阅 {@code GET|POST /travel/chat/{conversationId}}。
+     * Legacy-compatible conversation registration for {@code /travel/**}.
+     * New clients should call {@code POST /analysis/conversations} or {@code POST /finance/conversations}
+     * before opening the matching chat stream when registration is required.
      */
     @PostMapping("/conversations")
     public ResponseEntity<Map<String, String>> createConversation() {
@@ -46,7 +48,8 @@ public class TravelController {
     }
 
     /**
-     * 推荐：SSE 对话，query 放在 JSON body，无 URL 长度上限问题、减少访问日志中的明文 query。
+     * Legacy-compatible POST chat route. New clients should prefer
+     * {@code POST /analysis/chat/{conversationId}} with the same JSON body.
      */
     @PostMapping(value = "/chat/{conversationId}",
             consumes = MediaType.APPLICATION_JSON_VALUE,
@@ -63,7 +66,8 @@ public class TravelController {
     }
 
     /**
-     * 兼容路径：通过查询参数传 query；已标记弃用，请迁移到 {@link #chatPost}。
+     * Deprecated legacy GET route. New clients should use
+     * {@code POST /analysis/chat/{conversationId}} with a JSON body.
      */
     @Deprecated
     @GetMapping(value = "/chat/{conversationId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE + ";charset=UTF-8")

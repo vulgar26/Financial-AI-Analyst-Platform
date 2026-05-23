@@ -51,20 +51,19 @@ curl.exe -X POST "http://localhost:8081/knowledge/upload" `
 **推荐（POST + JSON）**：`query` 放在请求体，避免 GET 查询串长度与访问日志暴露问题。
 
 ```powershell
-curl.exe -N -X POST "http://localhost:8081/travel/chat/demo-conv" `
+curl.exe -N -X POST "http://localhost:8081/analysis/chat/demo-conv" `
   -H "Authorization: Bearer $token" `
   -H "Accept: text/event-stream" `
   -H "Content-Type: application/json" `
-  --data-raw "{\"query\":\"给我一份成都两天一夜行程\"}"
+  --data-raw "{\"query\":\"请基于我上传的资料，总结这家公司的近期财报亮点、风险因素和需要继续核验的数据。\"}"
 ```
 
 **兼容（GET，已弃用）**：服务端仍支持，但会返回 `Deprecation: true`；新脚本请改用上面的 POST。
 
 ```powershell
-curl.exe -N -X GET "http://localhost:8081/travel/chat/demo-conv?query=给我一份成都两天一夜行程" `
+curl.exe -N -X GET "http://localhost:8081/analysis/chat/demo-conv?query=请基于我上传的资料，总结这家公司的近期财报亮点、风险因素和需要继续核验的数据。" `
   -H "Authorization: Bearer $token" `
   -H "Accept: text/event-stream"
 ```
 
 终端会持续输出 SSE 行：流首可能含 **`event: plan_parse`** 与一行 **`data:`**（JSON 元数据），随后为引用与正文的 **`data:`** 行。`query` 长度受 `app.conversation.max-query-chars` 限制（默认 8192），超出返回 **400** JSON。
-

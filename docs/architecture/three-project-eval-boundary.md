@@ -6,7 +6,7 @@
 
 ### travel-ai-planner / finance-agent
 
-`travel-ai-planner` 是业务 target。当前主线正在从出行规划语义扩展到金融分析方向，也可称为 finance-agent 方向。
+`travel-ai-planner` 是业务 target。当前主线已经转向金融研究/分析语义，也可称为 finance-agent 方向；历史 travel 命名仅作为兼容背景保留。
 
 它负责：
 

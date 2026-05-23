@@ -9,9 +9,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class AppConversationProperties {
 
     /**
-     * {@code true}：仅允许已通过 {@code POST /travel/conversations} 登记到当前用户的 {@code conversationId} 调用
-     * {@code GET|POST /travel/chat/{conversationId}}；{@code false}：保持旧行为（演示/兼容）。
+     * {@code true}: only registered {@code conversationId} values may call the chat stream.
+     * Applies to preferred {@code /analysis/chat/**}, {@code /finance/chat/**} aliases,
+     * and legacy-compatible {@code /travel/chat/**}.
      */
+    // Applies to preferred /analysis/chat routes, /finance/chat aliases, and legacy-compatible /travel/chat routes.
     private boolean requireRegistration = false;
 
     /**

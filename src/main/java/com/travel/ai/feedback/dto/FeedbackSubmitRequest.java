@@ -7,9 +7,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code POST /travel/feedback} 请求体（snake_case）。
+ * Feedback request body shared by preferred {@code /analysis/feedback}, finance alias
+ * {@code /finance/feedback}, and legacy-compatible {@code /travel/feedback}.
  */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+// Request body shared by preferred /analysis/feedback, /finance/feedback alias, and legacy-compatible /travel/feedback.
 public class FeedbackSubmitRequest {
 
     private String conversationId;

@@ -68,6 +68,8 @@ import static com.travel.ai.tools.ToolObservability.log;
  * 检索合并阶段使用 {@link #mergeAndDedupeDocuments(List, int)}：按文档 id（无 id 时退化为正文 hash）
  * 显式去重，避免依赖 {@link Document#equals} 实现细节（UPGRADE P2-2）。
  */
+// Historical class name retained for compatibility.
+// This implementation backs FinancialAnalystAgent and currently serves the finance analyst workflow.
 @Component
 public class TravelAgent implements FinancialAnalystAgent {
 

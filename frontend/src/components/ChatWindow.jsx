@@ -25,7 +25,7 @@ export default function ChatWindow({
       </div>
       <div className="messages" aria-live="polite">
         {messages.length === 0 ? (
-          <p className="empty">登录、创建会话并上传知识后，即可发起旅行规划问题。</p>
+          <p className="empty">登录、创建会话并上传研究资料后，即可发起财报、研报、公告、新闻或市场数据相关的分析问题。输出不构成投资建议，关键结论需要人工复核。</p>
         ) : (
           messages.map((message) => (
             <article className={`message ${message.role}`} key={message.id}>

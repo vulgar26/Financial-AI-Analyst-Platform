@@ -24,7 +24,7 @@ import java.util.Map;
  * 用户长期画像 CRUD：仅当前 JWT 主体；删除权见 {@link DeleteMapping}。
  */
 @RestController
-@RequestMapping("/travel/profile")
+@RequestMapping({"/travel/profile", "/analysis/profile", "/finance/profile"})
 public class UserProfileController {
 
     private final UserProfileService userProfileService;

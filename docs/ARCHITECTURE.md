@@ -1,12 +1,14 @@
 # ARCHITECTURE — 最简链路说明（与代码同步）
 
+API naming: `/analysis/**` is the preferred surface for the finance analyst workflow. `/finance/**` is the finance-semantic alias. `/travel/**` is retained as a legacy-compatible endpoint for existing clients and should not be used by new code.
+
 本项目的核心是 **固定线性编排下的可解释 RAG + SSE**：在 `TravelAgent` 内按阶段推进（见 §1.1），并补齐鉴权、会话隔离、限流、超时、Actuator、SSE 心跳。本文以当前源码和 `application.yml` 为准，历史计划与阶段记录已归档到 `docs/archive/`。
 
 ## 1. 请求链路（文本流程图）
 
 客户端请求（SSE，经鉴权与限流）  
-→ `TravelController`：可选 `POST /travel/conversations` 登记会话；**推荐** `POST /travel/chat/{conversationId}` + JSON `query`（路径校验、`max-query-chars`；`app.conversation.require-registration` 时校验 Redis 归属）；`GET …?query=` 仍兼容并带 `Deprecation`  
-→ `TravelAgent.chat(conversationId, userMessage)`  
+→ `AnalysisController`：可选 `POST /analysis/conversations` 登记会话；**推荐** `POST /analysis/chat/{conversationId}` + JSON `query`（路径校验、`max-query-chars`；`app.conversation.require-registration` 时校验 Redis 归属）；`GET …?query=` 仍兼容并带 `Deprecation`。`TravelController` / `/travel/**` 仅作为 legacy-compatible route 保留。  
+→ `TravelAgent.chat(conversationId, userMessage)`（legacy-compatible implementation currently serving the finance analyst workflow）  
 → **线性阶段**（同一 `requestId` 日志）：`PLAN`（结构化计划 JSON，可配置 LLM）→ `RETRIEVE` → `TOOL` → `GUARD` → `WRITE`；其中 `RETRIEVE`/`TOOL`/`GUARD` 是否**物理执行**由解析后的 plan `steps[*].stage` 决定（`PlanPhysicalStagePolicy`，含 `RETRIEVE` 时隐式 `GUARD`）  
 → SSE：首段 **`event: plan_parse`**（`data` 为 JSON，字段与评测 `meta.plan_parse_*` / 日志 `[plan]` 对齐）→ `引用片段` 首包 `data` → 正文 `data` → `comment` 心跳
 
@@ -64,7 +66,7 @@
 
 ### 5.1 鉴权与会话隔离
 
-- 业务接口（`/travel/**`、`/knowledge/**` 等）通过 `SecurityConfig` 受 Spring Security 保护。
+- 业务接口（主推 `/analysis/**`、金融语义 alias `/finance/**`、legacy-compatible `/travel/**`、`/knowledge/**` 等）通过 `SecurityConfig` 受 Spring Security 保护。
 - **`/api/v1/eval/**`**：路径需 **已认证**；由 `EvalGatewayAuthFilter` 在校验 **`X-Eval-Gateway-Key`** 与 `app.eval.gateway-key`（环境变量 `APP_EVAL_GATEWAY_KEY`）通过后注入 `eval-gateway` 主体（与 JWT 可并存于不同请求）。未配置网关密钥时评测接口 **401**。
 - `POST /auth/login` 使用内存用户（如 `demo/demo123`）与 `JwtService` 签发 JWT，客户端在后续请求中通过 `Authorization: Bearer ...` 访问。
 - `JwtAuthFilter` 在每次请求前解析 JWT，将当前用户写入 `SecurityContext`，`TravelAgent` 与 `KnowledgeServiceImpl` 从中读取用户名，用于：
@@ -74,7 +76,7 @@
 ### 5.2 限流
 
 - `RateLimitingFilter` 是一个全局 `OncePerRequestFilter`，在 `JwtAuthFilter` 之后执行：
-  - 针对 `/travel/chat/**` 使用 Bucket4j + Caffeine 为每个用户/IP 创建独立 token bucket。
+  - 针对 `/analysis/chat/**`、`/finance/chat/**` 和 legacy-compatible `/travel/chat/**` 使用 Bucket4j + Caffeine 为每个用户/IP 创建独立 token bucket。
   - 默认策略：每用户/IP 每分钟 5 次请求（可配置），超额时立即返回 HTTP 429，Body 与鉴权/REST 同形：`{"error":"RATE_LIMITED","message":"请求过于频繁，请稍后再试"}`（`JsonApiErrorSupport`）
   - 登录用户用 `user:{username}` 作为限流 key，匿名用户退化为按 IP 限流。
 

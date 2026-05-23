@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  confirmPendingProfile,
-  createConversation,
-  deleteKnowledge,
-  discardPendingProfile,
-  extractProfileSuggestion,
-  getPendingProfile,
-  getProfile,
-  listKnowledge,
-  listFeedback,
+  confirmPendingAnalysisProfile,
+  createAnalysisConversation,
+  deleteAnalysisKnowledge,
+  discardPendingAnalysisProfile,
+  extractAnalysisProfileSuggestion,
+  getPendingAnalysisProfile,
+  getAnalysisProfile,
+  listAnalysisKnowledge,
+  listAnalysisFeedback,
   login,
-  resetProfile,
-  streamChat,
-  submitFeedback,
-  uploadKnowledge,
+  resetAnalysisProfile,
+  streamAnalysisChat,
+  submitAnalysisFeedback,
+  uploadAnalysisKnowledge,
 } from './api'
 import AgentTracePanel from './components/AgentTracePanel'
 import ChatWindow from './components/ChatWindow'
@@ -25,7 +25,7 @@ import ProfilePanel from './components/ProfilePanel'
 import SourcesPanel from './components/SourcesPanel'
 import './App.css'
 
-const DEFAULT_QUERY = '请基于我上传的资料，给我一份成都两天一夜旅行规划，包含行程、交通建议和注意事项。'
+const DEFAULT_QUERY = '请基于我上传的资料，总结这家公司的近期财报亮点、风险因素和需要继续核验的数据。'
 
 function safeJson(data) {
   try {
@@ -135,12 +135,12 @@ export default function App() {
   const refreshProfile = useCallback(async () => {
     if (!token) return
     try {
-      const current = await getProfile(token)
+      const current = await getAnalysisProfile(token)
       setProfile(current)
       setProfileStatus('画像已刷新。')
       if (conversationId) {
         try {
-          const pending = await getPendingProfile(token, conversationId)
+          const pending = await getPendingAnalysisProfile(token, conversationId)
           setPendingProfile(pending)
         } catch (err) {
           if (err.status !== 404) setProfileStatus(err.message)
@@ -155,7 +155,7 @@ export default function App() {
   const refreshFeedback = useCallback(async () => {
     if (!token) return
     try {
-      const data = await listFeedback(token, 5)
+      const data = await listAnalysisFeedback(token, 5)
       setFeedbackItems(data.items || [])
     } catch {
       setFeedbackItems([])
@@ -166,7 +166,7 @@ export default function App() {
     if (!token) return
     setKnowledgeLoading(true)
     try {
-      const data = await listKnowledge(token)
+      const data = await listAnalysisKnowledge(token)
       setKnowledgeItems(data.items || [])
       setKnowledgeStatus('知识列表已刷新。')
     } catch (err) {
@@ -193,7 +193,7 @@ export default function App() {
       if (!auth.token) throw new Error('登录响应中没有 token。')
       setToken(auth.token)
       localStorage.setItem('token', auth.token)
-      const conversation = await createConversation(auth.token)
+      const conversation = await createAnalysisConversation(auth.token)
       setConversationId(conversation.conversationId)
       localStorage.setItem('conversationId', conversation.conversationId)
       setLoginStatus('登录成功，已创建新会话。')
@@ -222,7 +222,7 @@ export default function App() {
   const handleNewConversation = useCallback(async () => {
     setError('')
     try {
-      const data = await createConversation(token)
+      const data = await createAnalysisConversation(token)
       setConversationId(data.conversationId)
       localStorage.setItem('conversationId', data.conversationId)
       setMessages([])
@@ -244,7 +244,7 @@ export default function App() {
     }
     setUploading(true)
     try {
-      const result = await uploadKnowledge(token, file)
+      const result = await uploadAnalysisKnowledge(token, file)
       setUploadResult(result)
       await refreshKnowledge()
       setGlobalStatus('知识上传完成。')
@@ -269,7 +269,7 @@ export default function App() {
     setError('')
     setKnowledgeStatus('正在删除知识文件...')
     try {
-      await deleteKnowledge(token, fileId)
+      await deleteAnalysisKnowledge(token, fileId)
       setKnowledgeStatus('知识文件已删除。')
       setGlobalStatus('知识文件已删除。')
       await refreshKnowledge()
@@ -367,7 +367,7 @@ export default function App() {
     setGlobalStatus('正在连接 SSE...')
 
     try {
-      await streamChat(token, conversationId, query.trim(), {
+      await streamAnalysisChat(token, conversationId, query.trim(), {
         onEvent: (eventPayload) => handleSseEvent(assistantId, eventPayload),
         onComment: () => {},
         onParseError: (line) => setParseErrors((current) => [...current, line]),
@@ -398,9 +398,9 @@ export default function App() {
   const handleExtractProfile = useCallback(async () => {
     setProfileStatus('正在抽取画像建议...')
     try {
-      const result = await extractProfileSuggestion(token, conversationId, true)
+      const result = await extractAnalysisProfileSuggestion(token, conversationId, true)
       if (result.pendingSaved || result.pending_saved) {
-        const pending = await getPendingProfile(token, conversationId)
+        const pending = await getPendingAnalysisProfile(token, conversationId)
         setPendingProfile(pending)
         setProfileStatus('已生成待确认画像。')
       } else {
@@ -417,7 +417,7 @@ export default function App() {
 
   const handleConfirmProfile = useCallback(async () => {
     try {
-      const result = await confirmPendingProfile(token, conversationId)
+      const result = await confirmPendingAnalysisProfile(token, conversationId)
       setProfile(result)
       setPendingProfile(null)
       setProfileStatus('待确认画像已写入。')
@@ -428,7 +428,7 @@ export default function App() {
 
   const handleDiscardProfile = useCallback(async () => {
     try {
-      await discardPendingProfile(token, conversationId)
+      await discardPendingAnalysisProfile(token, conversationId)
       setPendingProfile(null)
       setProfileStatus('已忽略待确认画像。')
     } catch (err) {
@@ -438,7 +438,7 @@ export default function App() {
 
   const handleResetProfile = useCallback(async () => {
     try {
-      await resetProfile(token, conversationId, false)
+      await resetAnalysisProfile(token, conversationId, false)
       setProfile({ schemaVersion: 1, profile: {} })
       setPendingProfile(null)
       setProfileStatus('画像已重置。')
@@ -450,7 +450,7 @@ export default function App() {
   const handleFeedback = useCallback(async (payload) => {
     setError('')
     try {
-      await submitFeedback(token, payload)
+      await submitAnalysisFeedback(token, payload)
       setGlobalStatus('反馈已提交。')
       await refreshFeedback()
     } catch (err) {
@@ -462,9 +462,9 @@ export default function App() {
     <main className="app-shell">
       <header className="hero">
         <div>
-          <p className="eyebrow">Travel AI Planner</p>
-          <h1>AI 旅行规划助手</h1>
-          <p>展示后端已具备的登录鉴权、知识上传、RAG 流式聊天、Agent 阶段事件、用户画像和反馈闭环。</p>
+          <p className="eyebrow">Finance AI Analyst</p>
+          <h1>金融研究分析助手</h1>
+          <p>用于演示金融研究资料上传、RAG 检索、流式分析、Agent 阶段事件、引用来源和反馈闭环。输出仅供研究和教育参考，不构成投资建议，不执行交易；资料、引用和工具结果需要人工复核。</p>
         </div>
         <div className="hero-status">
           <span>{globalStatus || '等待操作'}</span>

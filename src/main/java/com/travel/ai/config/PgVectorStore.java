@@ -134,6 +134,7 @@ public class PgVectorStore implements VectorStore {
     /**
      * 仅支持 TravelAgent 使用的 {@code user_id == ?} 过滤；其它表达式保持不筛选（与旧行为一致）。
      */
+    // Supports the finance analyst runtime user_id filter used by the legacy-named TravelAgent implementation.
     private Optional<String> extractEqUserId(Filter.Expression expr) {
         if (expr == null) {
             return Optional.empty();

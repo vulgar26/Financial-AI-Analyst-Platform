@@ -1,5 +1,7 @@
 # Financial AI Analyst Platform
 
+> API naming note: `/analysis/**` is the preferred API for new finance analyst clients. `/finance/**` is the finance-semantic alias. `/travel/**` remains a legacy-compatible endpoint for existing callers and should not be used by new code.
+
 Financial AI Analyst Platform 是一个面向金融研究分析场景的 Agentic RAG + SSE 后端项目。它不是自动交易系统，也不是简单包装大模型接口，而是围绕 Spring Boot 3、Spring AI Alibaba、PostgreSQL/pgvector、Redis 和 JWT，把知识上传、检索增强、线性 Agent 编排、流式输出、用户隔离、工具治理、合规边界和评测接口串成一条可演示、可测试的后端链路。
 
 > Legacy note: 项目目录和部分兼容类仍保留 `travel-ai-planner` / `/travel/**` 命名，以保证现有前端、测试和 API 不被破坏。新的金融分析别名已通过 `/analysis/**` 与 `/finance/**` 暴露。
@@ -52,7 +54,7 @@ PLAN -> RETRIEVE -> TOOL -> GUARD -> WRITE
 - 评测接口 `POST /api/v1/eval/chat`，用于非流式 JSON 回归验证。
 - Docker Compose 启动 Postgres/Redis/App，Flyway 管理数据库迁移。
 - JUnit、Spring Boot Test、Testcontainers 和 GitHub Actions CI。
-- Vite + React 最小演示前端，继续使用 legacy `/travel/**` API，保持可运行。
+- Vite + React 最小演示前端，默认使用主推 `/analysis/**` API；`/travel/**` 仅作为 legacy-compatible endpoint 保留。
 
 ## API 入口
 
@@ -63,15 +65,21 @@ PLAN -> RETRIEVE -> TOOL -> GUARD -> WRITE
 - `GET /analysis/chat/{conversationId}?query=...`
 - `GET /analysis/knowledge`
 - `DELETE /analysis/knowledge/{fileId}`
+- `GET /analysis/profile`
+- `POST /analysis/profile/extract-suggestion`
+- `POST /analysis/feedback`
+- `GET /analysis/feedback?limit=5&offset=0`
 - 同等 `/finance/**` alias
 
-兼容保留：
+兼容保留（legacy-compatible，不建议新代码继续使用）：
 
 - `POST /travel/conversations`
 - `POST /travel/chat/{conversationId}`
 - `GET /travel/chat/{conversationId}?query=...`
 - `GET /travel/knowledge`
 - `DELETE /travel/knowledge/{fileId}`
+- `GET /travel/profile`
+- `POST /travel/feedback`
 
 ## 快速启动
 
