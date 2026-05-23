@@ -8,6 +8,8 @@ import com.travel.ai.eval.dto.EvalChatResponse;
 import com.travel.ai.eval.dto.EvalChatResultTool;
 import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.runtime.PolicyStageAnchor;
+import com.travel.ai.runtime.model.NodeStatus;
+import com.travel.ai.runtime.trace.StageTrace;
 import com.travel.ai.runtime.trace.ToolTrace;
 import com.travel.ai.eval.dto.EvalChatRetrievalHit;
 import com.travel.ai.eval.dto.EvalChatSource;
@@ -45,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.Executors;
@@ -81,6 +84,7 @@ public class EvalChatService {
     private static final String FINANCE_GUARD_POLICY_TYPE = "finance_guard";
     private static final String FINANCE_GUARD_RULE_ID = "market_data_mock_disclosure";
     private static final String MARKET_DATA_CONNECTOR = "market_data";
+    private static final List<String> EVAL_STAGE_TRACE_ORDER = List.of("PLAN", "RETRIEVE", "TOOL", "GUARD", "WRITE");
 
     /** 与主线 SSE {@code TravelAgent} 总超时提示对齐的评测归因码。 */
     public static final String ERROR_CODE_AGENT_TOTAL_TIMEOUT = "AGENT_TOTAL_TIMEOUT";
@@ -734,9 +738,82 @@ public class EvalChatService {
         maybeAttachProviderTokenUsage(response.getMeta(), request);
         EvalReflectionSupport.apply(response, request, appEvalProperties.isReflectionMetaEnabled());
         attachRetrievalMembershipMeta(response.getMeta(), response, membershipCtx, evidence);
+        maybeAttachSyntheticStageTrace(response);
         maybeAttachMarketDataEvalContract(response, request);
         maybePersistEvalCheckpoint(request, response, effectivePlanJsonForCheckpoint, evidence);
         return response;
+    }
+
+    private void maybeAttachSyntheticStageTrace(EvalChatResponse response) {
+        EvalChatMeta meta = response != null ? response.getMeta() : null;
+        if (meta == null || meta.getStageTrace() != null) {
+            return;
+        }
+        List<String> stageOrder = meta.getStageOrder();
+        if (stageOrder == null || stageOrder.isEmpty()) {
+            return;
+        }
+        List<String> normalized = stageOrder.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .map(s -> s.toUpperCase(java.util.Locale.ROOT))
+                .toList();
+        if (normalized.isEmpty()) {
+            return;
+        }
+        Set<String> executed = Set.copyOf(normalized);
+        List<String> traceOrder = syntheticStageTraceOrder(normalized);
+        if (traceOrder.isEmpty()) {
+            return;
+        }
+        List<com.travel.ai.eval.dto.EvalChatStageTrace> traces = new ArrayList<>(traceOrder.size());
+        for (String stage : traceOrder) {
+            boolean stageExecuted = executed.contains(stage);
+            NodeStatus status = syntheticStageStatus(stage, stageExecuted, response);
+            String errorCode = syntheticStageErrorCode(stage, status, response);
+            Map<String, String> attrs = stageExecuted ? Map.of() : Map.of("reason", "skipped_by_plan");
+            StageTrace trace = new StageTrace(stage, status, 0L, errorCode, null, attrs);
+            traces.add(RuntimeEvalTraceMapper.toEvalStageTrace(trace));
+        }
+        meta.setStageTrace(traces);
+    }
+
+    private static List<String> syntheticStageTraceOrder(List<String> normalizedStageOrder) {
+        String last = normalizedStageOrder.get(normalizedStageOrder.size() - 1);
+        int lastFixedIndex = EVAL_STAGE_TRACE_ORDER.indexOf(last);
+        if (lastFixedIndex < 0) {
+            return normalizedStageOrder;
+        }
+        return EVAL_STAGE_TRACE_ORDER.subList(0, lastFixedIndex + 1);
+    }
+
+    private static NodeStatus syntheticStageStatus(String stage, boolean stageExecuted, EvalChatResponse response) {
+        if (!stageExecuted) {
+            return NodeStatus.SKIPPED;
+        }
+        if (!"TOOL".equals(stage)) {
+            return NodeStatus.SUCCESS;
+        }
+        EvalChatResultTool tool = response != null ? response.getTool() : null;
+        if (tool == null || tool.getOutcome() == null) {
+            return NodeStatus.SUCCESS;
+        }
+        return switch (tool.getOutcome()) {
+            case EvalToolStageRunner.OUTCOME_TIMEOUT -> NodeStatus.TIMEOUT;
+            case EvalToolStageRunner.OUTCOME_ERROR,
+                    EvalToolStageRunner.OUTCOME_DISABLED_BY_CIRCUIT_BREAKER,
+                    EvalToolStageRunner.OUTCOME_RATE_LIMITED -> NodeStatus.FAILED;
+            default -> NodeStatus.SUCCESS;
+        };
+    }
+
+    private static String syntheticStageErrorCode(String stage, NodeStatus status, EvalChatResponse response) {
+        if (!"TOOL".equals(stage) || status == NodeStatus.SUCCESS || status == NodeStatus.SKIPPED) {
+            return null;
+        }
+        String errorCode = response != null ? response.getErrorCode() : null;
+        return errorCode != null && !errorCode.isBlank() ? errorCode : null;
     }
 
     private void maybeAttachMarketDataEvalContract(EvalChatResponse response, EvalChatRequest request) {

@@ -156,7 +156,21 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.stage_order[0]").value("PLAN"))
                 .andExpect(jsonPath("$.meta.stage_order[1]").value("WRITE"))
                 .andExpect(jsonPath("$.meta.step_count").value(2))
-                .andExpect(jsonPath("$.meta.plan_parse_outcome").value("success"));
+                .andExpect(jsonPath("$.meta.plan_parse_outcome").value("success"))
+                .andExpect(jsonPath("$.meta.stage_trace.length()").value(5))
+                .andExpect(jsonPath("$.meta.stage_trace[0].stage").value("PLAN"))
+                .andExpect(jsonPath("$.meta.stage_trace[0].status").value("success"))
+                .andExpect(jsonPath("$.meta.stage_trace[1].stage").value("RETRIEVE"))
+                .andExpect(jsonPath("$.meta.stage_trace[1].status").value("skipped"))
+                .andExpect(jsonPath("$.meta.stage_trace[1].attrs.reason").value("skipped_by_plan"))
+                .andExpect(jsonPath("$.meta.stage_trace[2].stage").value("TOOL"))
+                .andExpect(jsonPath("$.meta.stage_trace[2].status").value("skipped"))
+                .andExpect(jsonPath("$.meta.stage_trace[2].attrs.reason").value("skipped_by_plan"))
+                .andExpect(jsonPath("$.meta.stage_trace[3].stage").value("GUARD"))
+                .andExpect(jsonPath("$.meta.stage_trace[3].status").value("skipped"))
+                .andExpect(jsonPath("$.meta.stage_trace[3].attrs.reason").value("skipped_by_plan"))
+                .andExpect(jsonPath("$.meta.stage_trace[4].stage").value("WRITE"))
+                .andExpect(jsonPath("$.meta.stage_trace[4].status").value("success"));
     }
 
     @Test
@@ -201,7 +215,12 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.plan_parse_outcome").value("success"))
                 .andExpect(jsonPath("$.meta.recovery_action").value("none"))
                 .andExpect(jsonPathAbsentOrNull("$.meta.workflow_id"))
-                .andExpect(jsonPathAbsentOrNull("$.meta.stage_trace"))
+                .andExpect(jsonPath("$.meta.stage_trace.length()").value(5))
+                .andExpect(jsonPath("$.meta.stage_trace[0].stage").value("PLAN"))
+                .andExpect(jsonPath("$.meta.stage_trace[0].kind").value("workflow_node"))
+                .andExpect(jsonPath("$.meta.stage_trace[0].status").value("success"))
+                .andExpect(jsonPath("$.meta.stage_trace[4].stage").value("WRITE"))
+                .andExpect(jsonPath("$.meta.stage_trace[4].status").value("success"))
                 .andExpect(jsonPathAbsentOrNull("$.meta.tool_trace"))
                 .andExpect(jsonPathAbsentOrNull("$.meta.evidence_summary"))
                 .andExpect(jsonPathAbsentOrNull("$.tool"))
@@ -490,7 +509,14 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.tool_trace[0].attrs.mock_mode").value("true"))
                 .andExpect(jsonPath("$.meta.tool_trace[0].attrs.freshness").value("mock_non_realtime"))
                 .andExpect(jsonPath("$.meta.tool_trace[0].attrs.tradable").value("false"))
-                .andExpect(jsonPathAbsentOrNull("$.meta.stage_trace"))
+                .andExpect(jsonPath("$.meta.stage_trace.length()").value(5))
+                .andExpect(jsonPath("$.meta.stage_trace[0].stage").value("PLAN"))
+                .andExpect(jsonPath("$.meta.stage_trace[1].stage").value("RETRIEVE"))
+                .andExpect(jsonPath("$.meta.stage_trace[2].stage").value("TOOL"))
+                .andExpect(jsonPath("$.meta.stage_trace[2].kind").value("workflow_node"))
+                .andExpect(jsonPath("$.meta.stage_trace[2].status").value("success"))
+                .andExpect(jsonPath("$.meta.stage_trace[3].stage").value("GUARD"))
+                .andExpect(jsonPath("$.meta.stage_trace[4].stage").value("WRITE"))
                 .andExpect(jsonPathAbsentOrNull("$.meta.evidence_summary"));
     }
 
@@ -547,7 +573,10 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.tool_trace[0].latency_ms").isNumber())
                 .andExpect(jsonPath("$.meta.tool_trace[0].attrs.mock_mode").value("true"))
                 .andExpect(jsonPath("$.meta.tool_trace[0].attrs.freshness").value("mock_non_realtime"))
-                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.tradable").value("false"));
+                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.tradable").value("false"))
+                .andExpect(jsonPath("$.meta.stage_trace[2].stage").value("TOOL"))
+                .andExpect(jsonPath("$.meta.stage_trace[2].status").value("timeout"))
+                .andExpect(jsonPath("$.meta.stage_trace[2].error_code").value(EvalToolStageRunner.ERROR_CODE_TOOL_TIMEOUT));
     }
 
     /**
