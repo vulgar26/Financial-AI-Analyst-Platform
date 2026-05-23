@@ -45,7 +45,10 @@ import com.travel.ai.runtime.model.WorkflowContext;
 import com.travel.ai.runtime.model.WorkflowTask;
 import com.travel.ai.runtime.node.WorkflowNode;
 import com.travel.ai.runtime.trace.StageTrace;
+import com.travel.ai.runtime.trace.ToolTrace;
+import com.travel.ai.runtime.trace.RuntimeTraceMapper;
 import com.travel.ai.tools.GovernedAgentTool;
+import com.travel.ai.tools.ToolResult;
 import com.travel.ai.web.RequestTraceFilter;
 
 import java.time.Duration;
@@ -430,6 +433,7 @@ public class TravelAgent implements FinancialAnalystAgent {
     }
 
     private void runLinearStagesWithRuntime(MainAgentTurnContext ctx) {
+        ctx.workflowRuntimePath = true;
         WorkflowTask task = WorkflowTask.of(
                 "finance_analyst_chat",
                 "v1",
@@ -444,6 +448,7 @@ public class TravelAgent implements FinancialAnalystAgent {
                 new ToolStageNode(ctx),
                 new GuardStageNode(ctx)
         ));
+        captureRuntimeStageTraces(ctx, runtimeCtx.getStageTraces());
         ctx.stageEvents.addAll(toStageEventsForRuntime(runtimeCtx.getStageTraces(), ctx.requestId));
         StageTrace failed = firstFailedTrace(runtimeCtx.getStageTraces());
         if (failed != null) {
@@ -454,6 +459,24 @@ public class TravelAgent implements FinancialAnalystAgent {
 
     static boolean shouldUseWorkflowRuntime(AppAgentProperties properties) {
         return properties != null && properties.getWorkflowRuntime().isEnabled();
+    }
+
+    static void captureRuntimeStageTraces(MainAgentTurnContext ctx, List<StageTrace> traces) {
+        if (ctx == null || traces == null || traces.isEmpty()) {
+            return;
+        }
+        ctx.runtimeStageTraces.clear();
+        ctx.runtimeStageTraces.addAll(traces);
+    }
+
+    static void captureRuntimeToolTrace(MainAgentTurnContext ctx, ToolResult result) {
+        if (ctx == null || !ctx.workflowRuntimePath || result == null) {
+            return;
+        }
+        ToolTrace trace = RuntimeTraceMapper.toToolTrace(result);
+        if (trace != null) {
+            ctx.runtimeToolTraces.add(trace);
+        }
     }
 
     static List<StageEvent> toStageEventsForRuntime(List<StageTrace> traces, String requestId) {
@@ -799,6 +822,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         if (selected != null) {
             com.travel.ai.tools.ToolResult r = executeGovernedTool(selected, ctx.userMessage);
             log(log, r, ctx.requestId);
+            captureRuntimeToolTrace(ctx, r);
             ctx.policyEvents.add(PolicyEvent.of(
                     "tool_stage",
                     PolicyStageAnchor.TOOL.wireValue(),
@@ -1177,7 +1201,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         return Boolean.parseBoolean(ctx.getAttrs().getOrDefault(key, "false"));
     }
 
-    private static final class MainAgentTurnContext {
+    static final class MainAgentTurnContext {
         final String conversationId;
         final String userMessage;
         final String requestId;
@@ -1188,6 +1212,10 @@ public class TravelAgent implements FinancialAnalystAgent {
         final Map<StageName, Long> stageElapsedMs = new LinkedHashMap<>();
         /** 主线 SSE 可观测：策略/决策事件（与 eval meta.policy_events 同语义）。 */
         final List<PolicyEvent> policyEvents = new ArrayList<>();
+        /** Runtime R3 internal traces. They are not emitted to SSE or eval in R3B. */
+        final List<StageTrace> runtimeStageTraces = new ArrayList<>();
+        final List<ToolTrace> runtimeToolTraces = new ArrayList<>();
+        boolean workflowRuntimePath;
         /**
          * WRITE 子流：LLM {@code .timeout(llm_stream)} 或其它异常经 onErrorResume 降级为占位文本时，
          * 在 {@link # doOnError} 写入对应 {@code error_code}，供 {@link TravelAgent#chat} 注入 {@code event:error}。

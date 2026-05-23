@@ -489,6 +489,7 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.tool_trace[0].latency_ms").isNumber())
                 .andExpect(jsonPath("$.meta.tool_trace[0].attrs.mock_mode").value("true"))
                 .andExpect(jsonPath("$.meta.tool_trace[0].attrs.freshness").value("mock_non_realtime"))
+                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.tradable").value("false"))
                 .andExpect(jsonPathAbsentOrNull("$.meta.stage_trace"))
                 .andExpect(jsonPathAbsentOrNull("$.meta.evidence_summary"));
     }
@@ -545,7 +546,8 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.tool_trace[0].error_code").value(EvalToolStageRunner.ERROR_CODE_TOOL_TIMEOUT))
                 .andExpect(jsonPath("$.meta.tool_trace[0].latency_ms").isNumber())
                 .andExpect(jsonPath("$.meta.tool_trace[0].attrs.mock_mode").value("true"))
-                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.freshness").value("mock_non_realtime"));
+                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.freshness").value("mock_non_realtime"))
+                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.tradable").value("false"));
     }
 
     /**

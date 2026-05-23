@@ -6,9 +6,9 @@ import com.travel.ai.eval.dto.EvalChatPolicyEvent;
 import com.travel.ai.eval.dto.EvalChatRequest;
 import com.travel.ai.eval.dto.EvalChatResponse;
 import com.travel.ai.eval.dto.EvalChatResultTool;
-import com.travel.ai.eval.dto.EvalChatToolTrace;
 import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.runtime.PolicyStageAnchor;
+import com.travel.ai.runtime.trace.ToolTrace;
 import com.travel.ai.eval.dto.EvalChatRetrievalHit;
 import com.travel.ai.eval.dto.EvalChatSource;
 import com.travel.ai.eval.dto.EvalGuardrailsCapability;
@@ -770,17 +770,20 @@ public class EvalChatService {
         if (tool == null || !Boolean.TRUE.equals(tool.getRequired()) || !tool.isUsed()) {
             return;
         }
-        EvalChatToolTrace trace = new EvalChatToolTrace();
-        trace.setToolName(MARKET_DATA_CONNECTOR);
-        trace.setConnector(MARKET_DATA_CONNECTOR);
-        trace.setRequired(true);
-        trace.setUsed(true);
-        trace.setSucceeded(Boolean.TRUE.equals(tool.getSucceeded()));
-        trace.setOutcome(tool.getOutcome());
-        trace.setLatencyMs(meta.getToolLatencyMs());
-        trace.setErrorCode(response.getErrorCode());
-        trace.setAttrs(marketDataToolTraceAttrs());
-        meta.setToolTrace(List.of(trace));
+        ToolTrace trace = new ToolTrace(
+                MARKET_DATA_CONNECTOR,
+                MARKET_DATA_CONNECTOR,
+                true,
+                true,
+                Boolean.TRUE.equals(tool.getSucceeded()),
+                tool.getOutcome(),
+                meta.getToolLatencyMs(),
+                response.getErrorCode(),
+                null,
+                null,
+                marketDataToolTraceAttrs()
+        );
+        meta.setToolTrace(List.of(RuntimeEvalTraceMapper.toEvalToolTrace(trace)));
     }
 
     private static boolean isMarketDataExplainQuery(String query) {
@@ -815,6 +818,7 @@ public class EvalChatService {
         LinkedHashMap<String, String> attrs = new LinkedHashMap<>();
         attrs.put("mock_mode", "true");
         attrs.put("freshness", "mock_non_realtime");
+        attrs.put("tradable", "false");
         return attrs;
     }
 
