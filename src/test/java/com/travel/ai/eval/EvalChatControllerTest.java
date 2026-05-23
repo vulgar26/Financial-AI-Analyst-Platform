@@ -42,6 +42,7 @@ import static org.mockito.Mockito.when;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.matchesPattern;
+import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -199,6 +200,10 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.plan_parse_attempts").value(1))
                 .andExpect(jsonPath("$.meta.plan_parse_outcome").value("success"))
                 .andExpect(jsonPath("$.meta.recovery_action").value("none"))
+                .andExpect(jsonPathAbsentOrNull("$.meta.workflow_id"))
+                .andExpect(jsonPathAbsentOrNull("$.meta.stage_trace"))
+                .andExpect(jsonPathAbsentOrNull("$.meta.tool_trace"))
+                .andExpect(jsonPathAbsentOrNull("$.meta.evidence_summary"))
                 .andExpect(jsonPathAbsentOrNull("$.tool"))
                 .andExpect(jsonPathAbsentOrNull("$.meta.tool_calls_count"));
     }
@@ -427,7 +432,10 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.meta.tool_outcome").value(EvalToolStageRunner.OUTCOME_OK))
                 .andExpect(jsonPath("$.meta.tool_latency_ms").isNumber())
                 .andExpect(jsonPathAbsentOrNull("$.error_code"))
-                .andExpect(jsonPath("$.meta.stage_order[2]").value("TOOL"));
+                .andExpect(jsonPath("$.meta.stage_order[2]").value("TOOL"))
+                .andExpect(jsonPathAbsentOrNull("$.meta.workflow_id"))
+                .andExpect(jsonPathAbsentOrNull("$.meta.tool_trace"))
+                .andExpect(jsonPath("$.meta.policy_events[*].policy_type", not(hasItem("finance_guard"))));
     }
 
     @Test
@@ -454,7 +462,35 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.tool.outcome").value(EvalToolStageRunner.OUTCOME_OK))
                 .andExpect(jsonPath("$.meta.tool_calls_count").value(1))
                 .andExpect(jsonPath("$.meta.tool_outcome").value(EvalToolStageRunner.OUTCOME_OK))
-                .andExpect(jsonPath("$.meta.policy_events[*].policy_type", hasItem("tool_stage")));
+                .andExpect(jsonPath("$.meta.contract_version").value("eval_contract_v1"))
+                .andExpect(jsonPath("$.meta.workflow_id").value("market_data_explain"))
+                .andExpect(jsonPath("$.meta.workflow_version").value("v1"))
+                .andExpect(jsonPath("$.meta.workflow_family").value("finance"))
+                .andExpect(jsonPath("$.meta.policy_events[*].policy_type", hasItem("tool_stage")))
+                .andExpect(jsonPath("$.meta.policy_events[*].policy_type", hasItem("finance_guard")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].stage", hasItem("guard")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].behavior", hasItem("tool")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].decision", hasItem("allow")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].severity", hasItem("info")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].rule_id", hasItem("market_data_mock_disclosure")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].attrs.workflow_id", hasItem("market_data_explain")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].attrs.connector", hasItem("market_data")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].attrs.mock_mode", hasItem("true")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].attrs.freshness", hasItem("mock_non_realtime")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].attrs.tradable", hasItem("false")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].attrs.disclosure_required", hasItem("true")))
+                .andExpect(jsonPath("$.meta.policy_events[?(@.policy_type == 'finance_guard')].attrs.investment_advice_allowed", hasItem("false")))
+                .andExpect(jsonPath("$.meta.tool_trace[0].tool_name").value("market_data"))
+                .andExpect(jsonPath("$.meta.tool_trace[0].connector").value("market_data"))
+                .andExpect(jsonPath("$.meta.tool_trace[0].required").value(true))
+                .andExpect(jsonPath("$.meta.tool_trace[0].used").value(true))
+                .andExpect(jsonPath("$.meta.tool_trace[0].succeeded").value(true))
+                .andExpect(jsonPath("$.meta.tool_trace[0].outcome").value(EvalToolStageRunner.OUTCOME_OK))
+                .andExpect(jsonPath("$.meta.tool_trace[0].latency_ms").isNumber())
+                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.mock_mode").value("true"))
+                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.freshness").value("mock_non_realtime"))
+                .andExpect(jsonPathAbsentOrNull("$.meta.stage_trace"))
+                .andExpect(jsonPathAbsentOrNull("$.meta.evidence_summary"));
     }
 
     /**
@@ -497,7 +533,19 @@ class EvalChatControllerTest {
                 .andExpect(jsonPath("$.tool.outcome").value(EvalToolStageRunner.OUTCOME_TIMEOUT))
                 .andExpect(jsonPath("$.error_code").value(EvalToolStageRunner.ERROR_CODE_TOOL_TIMEOUT))
                 .andExpect(jsonPath("$.meta.tool_outcome").value(EvalToolStageRunner.OUTCOME_TIMEOUT))
-                .andExpect(jsonPath("$.meta.policy_events[*].policy_type", hasItem("tool_stage")));
+                .andExpect(jsonPath("$.meta.policy_events[*].policy_type", hasItem("tool_stage")))
+                .andExpect(jsonPath("$.meta.policy_events[*].policy_type", hasItem("finance_guard")))
+                .andExpect(jsonPath("$.meta.workflow_id").value("market_data_explain"))
+                .andExpect(jsonPath("$.meta.tool_trace[0].tool_name").value("market_data"))
+                .andExpect(jsonPath("$.meta.tool_trace[0].connector").value("market_data"))
+                .andExpect(jsonPath("$.meta.tool_trace[0].required").value(true))
+                .andExpect(jsonPath("$.meta.tool_trace[0].used").value(true))
+                .andExpect(jsonPath("$.meta.tool_trace[0].succeeded").value(false))
+                .andExpect(jsonPath("$.meta.tool_trace[0].outcome").value(EvalToolStageRunner.OUTCOME_TIMEOUT))
+                .andExpect(jsonPath("$.meta.tool_trace[0].error_code").value(EvalToolStageRunner.ERROR_CODE_TOOL_TIMEOUT))
+                .andExpect(jsonPath("$.meta.tool_trace[0].latency_ms").isNumber())
+                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.mock_mode").value("true"))
+                .andExpect(jsonPath("$.meta.tool_trace[0].attrs.freshness").value("mock_non_realtime"));
     }
 
     /**

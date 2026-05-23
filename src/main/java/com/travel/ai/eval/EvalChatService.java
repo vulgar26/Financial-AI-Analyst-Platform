@@ -6,6 +6,7 @@ import com.travel.ai.eval.dto.EvalChatPolicyEvent;
 import com.travel.ai.eval.dto.EvalChatRequest;
 import com.travel.ai.eval.dto.EvalChatResponse;
 import com.travel.ai.eval.dto.EvalChatResultTool;
+import com.travel.ai.eval.dto.EvalChatToolTrace;
 import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.runtime.PolicyStageAnchor;
 import com.travel.ai.eval.dto.EvalChatRetrievalHit;
@@ -73,6 +74,13 @@ import static com.travel.ai.eval.EvalRagGateScenarios.Kind;
 public class EvalChatService {
 
     private static final Logger log = LoggerFactory.getLogger(EvalChatService.class);
+    private static final String EVAL_CONTRACT_V1 = "eval_contract_v1";
+    private static final String WORKFLOW_MARKET_DATA_EXPLAIN = "market_data_explain";
+    private static final String WORKFLOW_MARKET_DATA_VERSION = "v1";
+    private static final String WORKFLOW_FAMILY_FINANCE = "finance";
+    private static final String FINANCE_GUARD_POLICY_TYPE = "finance_guard";
+    private static final String FINANCE_GUARD_RULE_ID = "market_data_mock_disclosure";
+    private static final String MARKET_DATA_CONNECTOR = "market_data";
 
     /** 与主线 SSE {@code TravelAgent} 总超时提示对齐的评测归因码。 */
     public static final String ERROR_CODE_AGENT_TOTAL_TIMEOUT = "AGENT_TOTAL_TIMEOUT";
@@ -658,6 +666,20 @@ public class EvalChatService {
             String ruleId,
             String errorCode
     ) {
+        appendPolicyEvent(meta, policyType, stage, behavior, ruleId, errorCode, null, null, null);
+    }
+
+    private void appendPolicyEvent(
+            EvalChatMeta meta,
+            String policyType,
+            String stage,
+            String behavior,
+            String ruleId,
+            String errorCode,
+            String decision,
+            String severity,
+            Map<String, String> attrs
+    ) {
         if (meta == null || policyType == null || policyType.isBlank()
                 || stage == null || stage.isBlank()
                 || behavior == null || behavior.isBlank()) {
@@ -678,6 +700,15 @@ public class EvalChatService {
         }
         if (shared.errorCode() != null && !shared.errorCode().isBlank()) {
             e.setErrorCode(shared.errorCode());
+        }
+        if (decision != null && !decision.isBlank()) {
+            e.setDecision(decision);
+        }
+        if (severity != null && !severity.isBlank()) {
+            e.setSeverity(severity);
+        }
+        if (attrs != null && !attrs.isEmpty()) {
+            e.setAttrs(Collections.unmodifiableMap(new LinkedHashMap<>(attrs)));
         }
         list.add(e);
     }
@@ -703,8 +734,88 @@ public class EvalChatService {
         maybeAttachProviderTokenUsage(response.getMeta(), request);
         EvalReflectionSupport.apply(response, request, appEvalProperties.isReflectionMetaEnabled());
         attachRetrievalMembershipMeta(response.getMeta(), response, membershipCtx, evidence);
+        maybeAttachMarketDataEvalContract(response, request);
         maybePersistEvalCheckpoint(request, response, effectivePlanJsonForCheckpoint, evidence);
         return response;
+    }
+
+    private void maybeAttachMarketDataEvalContract(EvalChatResponse response, EvalChatRequest request) {
+        if (response == null || response.getMeta() == null || request == null
+                || !isMarketDataExplainQuery(request.getQuery())) {
+            return;
+        }
+        EvalChatMeta meta = response.getMeta();
+        meta.setContractVersion(EVAL_CONTRACT_V1);
+        meta.setWorkflowId(WORKFLOW_MARKET_DATA_EXPLAIN);
+        meta.setWorkflowVersion(WORKFLOW_MARKET_DATA_VERSION);
+        meta.setWorkflowFamily(WORKFLOW_FAMILY_FINANCE);
+
+        appendPolicyEvent(
+                meta,
+                FINANCE_GUARD_POLICY_TYPE,
+                "guard",
+                response.getBehavior(),
+                FINANCE_GUARD_RULE_ID,
+                null,
+                "allow",
+                "info",
+                marketDataFinanceGuardAttrs()
+        );
+        maybeAttachMarketDataToolTrace(response);
+    }
+
+    private void maybeAttachMarketDataToolTrace(EvalChatResponse response) {
+        EvalChatResultTool tool = response.getTool();
+        EvalChatMeta meta = response.getMeta();
+        if (tool == null || !Boolean.TRUE.equals(tool.getRequired()) || !tool.isUsed()) {
+            return;
+        }
+        EvalChatToolTrace trace = new EvalChatToolTrace();
+        trace.setToolName(MARKET_DATA_CONNECTOR);
+        trace.setConnector(MARKET_DATA_CONNECTOR);
+        trace.setRequired(true);
+        trace.setUsed(true);
+        trace.setSucceeded(Boolean.TRUE.equals(tool.getSucceeded()));
+        trace.setOutcome(tool.getOutcome());
+        trace.setLatencyMs(meta.getToolLatencyMs());
+        trace.setErrorCode(response.getErrorCode());
+        trace.setAttrs(marketDataToolTraceAttrs());
+        meta.setToolTrace(List.of(trace));
+    }
+
+    private static boolean isMarketDataExplainQuery(String query) {
+        if (query == null || query.isBlank()) {
+            return false;
+        }
+        String q = query.toLowerCase(java.util.Locale.ROOT);
+        return q.contains("market")
+                || q.contains("quote")
+                || q.contains("price")
+                || q.contains("ticker")
+                || q.contains("volume")
+                || q.contains("p/e")
+                || q.contains("pe ratio")
+                || q.contains("valuation")
+                || q.contains("aapl");
+    }
+
+    private static Map<String, String> marketDataFinanceGuardAttrs() {
+        LinkedHashMap<String, String> attrs = new LinkedHashMap<>();
+        attrs.put("workflow_id", WORKFLOW_MARKET_DATA_EXPLAIN);
+        attrs.put("connector", MARKET_DATA_CONNECTOR);
+        attrs.put("mock_mode", "true");
+        attrs.put("freshness", "mock_non_realtime");
+        attrs.put("tradable", "false");
+        attrs.put("disclosure_required", "true");
+        attrs.put("investment_advice_allowed", "false");
+        return attrs;
+    }
+
+    private static Map<String, String> marketDataToolTraceAttrs() {
+        LinkedHashMap<String, String> attrs = new LinkedHashMap<>();
+        attrs.put("mock_mode", "true");
+        attrs.put("freshness", "mock_non_realtime");
+        return attrs;
     }
 
     private void maybePersistEvalCheckpoint(

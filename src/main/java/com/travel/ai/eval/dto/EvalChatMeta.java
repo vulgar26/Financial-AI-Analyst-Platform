@@ -31,6 +31,14 @@ public class EvalChatMeta {
     /** 单次请求唯一 id（UUID），便于与网关/日志 trace 对齐。 */
     private String requestId;
 
+    private String contractVersion;
+
+    private String workflowId;
+
+    private String workflowVersion;
+
+    private String workflowFamily;
+
     /**
      * 本请求实际经过的线性阶段序列（大写），为 {@code PLAN|RETRIEVE|TOOL|GUARD|WRITE} 的子序列（与主线 SSE 一致；
      * 长度随附录 E {@code plan.steps} 物理跳过而变短）。
@@ -207,6 +215,14 @@ public class EvalChatMeta {
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<EvalChatPolicyEvent> policyEvents;
 
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<EvalChatStageTrace> stageTrace;
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<EvalChatToolTrace> toolTrace;
+
+    private EvalChatEvidenceSummary evidenceSummary;
+
     /**
      * 检索命中条数（评测 stub）；空命中场景为 0；未参与门控时不返回。
      */
@@ -292,6 +308,38 @@ public class EvalChatMeta {
 
     public void setRequestId(String requestId) {
         this.requestId = requestId;
+    }
+
+    public String getContractVersion() {
+        return contractVersion;
+    }
+
+    public void setContractVersion(String contractVersion) {
+        this.contractVersion = contractVersion;
+    }
+
+    public String getWorkflowId() {
+        return workflowId;
+    }
+
+    public void setWorkflowId(String workflowId) {
+        this.workflowId = workflowId;
+    }
+
+    public String getWorkflowVersion() {
+        return workflowVersion;
+    }
+
+    public void setWorkflowVersion(String workflowVersion) {
+        this.workflowVersion = workflowVersion;
+    }
+
+    public String getWorkflowFamily() {
+        return workflowFamily;
+    }
+
+    public void setWorkflowFamily(String workflowFamily) {
+        this.workflowFamily = workflowFamily;
     }
 
     public List<String> getStageOrder() {
@@ -604,6 +652,30 @@ public class EvalChatMeta {
 
     public void setPolicyEvents(List<EvalChatPolicyEvent> policyEvents) {
         this.policyEvents = policyEvents;
+    }
+
+    public List<EvalChatStageTrace> getStageTrace() {
+        return stageTrace;
+    }
+
+    public void setStageTrace(List<EvalChatStageTrace> stageTrace) {
+        this.stageTrace = stageTrace;
+    }
+
+    public List<EvalChatToolTrace> getToolTrace() {
+        return toolTrace;
+    }
+
+    public void setToolTrace(List<EvalChatToolTrace> toolTrace) {
+        this.toolTrace = toolTrace;
+    }
+
+    public EvalChatEvidenceSummary getEvidenceSummary() {
+        return evidenceSummary;
+    }
+
+    public void setEvidenceSummary(EvalChatEvidenceSummary evidenceSummary) {
+        this.evidenceSummary = evidenceSummary;
     }
 
     public Integer getRetrieveHitCount() {
