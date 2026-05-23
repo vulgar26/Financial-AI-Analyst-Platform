@@ -4,7 +4,14 @@ import com.travel.ai.config.AppAgentProperties;
 import com.travel.ai.runtime.StageEvent;
 import com.travel.ai.runtime.StageEventKind;
 import com.travel.ai.runtime.StageName;
+import com.travel.ai.runtime.model.NodeResult;
 import com.travel.ai.runtime.model.NodeStatus;
+import com.travel.ai.runtime.model.WorkflowContext;
+import com.travel.ai.runtime.model.WorkflowTask;
+import com.travel.ai.runtime.node.GuardStageNode;
+import com.travel.ai.runtime.node.PlanStageNode;
+import com.travel.ai.runtime.node.RetrieveStageNode;
+import com.travel.ai.runtime.node.ToolStageNode;
 import com.travel.ai.runtime.trace.StageTrace;
 import com.travel.ai.runtime.trace.ToolTrace;
 import com.travel.ai.tools.ToolOutcome;
@@ -13,6 +20,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -111,6 +119,247 @@ class TravelAgentWorkflowRuntimeR2Test {
     }
 
     @Test
+    void runtimeFlagOn_planStageNodeExecutesDelegateAndWritesRunFlags() {
+        WorkflowContext ctx = workflowContext();
+        AtomicInteger planCalls = new AtomicInteger();
+        AtomicInteger resolvedCalls = new AtomicInteger();
+        PlanStageNode node = new PlanStageNode(new PlanStageNode.PlanStageDelegate() {
+            @Override
+            public PlanStageNode.PhysicalStageFlags stagePlanAndResolvePhysicalStages() {
+                planCalls.incrementAndGet();
+                return new PlanStageNode.PhysicalStageFlags(true, true, false);
+            }
+
+            @Override
+            public void onPhysicalStageFlagsResolved(PlanStageNode.PhysicalStageFlags flags) {
+                resolvedCalls.incrementAndGet();
+                assertThat(flags.runRetrieve()).isTrue();
+                assertThat(flags.runTool()).isTrue();
+                assertThat(flags.runGuard()).isFalse();
+            }
+        });
+
+        NodeResult result = node.execute(ctx);
+
+        assertThat(node.name()).isEqualTo("PLAN");
+        assertThat(result.status()).isEqualTo(NodeStatus.SUCCESS);
+        assertThat(planCalls).hasValue(1);
+        assertThat(resolvedCalls).hasValue(1);
+        assertThat(ctx.getAttrs()).containsEntry("run_retrieve", "true")
+                .containsEntry("run_tool", "true")
+                .containsEntry("run_guard", "false");
+        assertThat(ctx.getPolicyEvents()).isEmpty();
+        assertThat(ctx.getStageTraces()).isEmpty();
+    }
+
+    @Test
+    void runtimeFlagOn_planStageNodePropagatesMarketDataPhysicalFlags() {
+        WorkflowContext ctx = workflowContext();
+        PlanStageNode node = new PlanStageNode(new PlanStageNode.PlanStageDelegate() {
+            @Override
+            public PlanStageNode.PhysicalStageFlags stagePlanAndResolvePhysicalStages() {
+                return new PlanStageNode.PhysicalStageFlags(false, true, true);
+            }
+        });
+
+        NodeResult result = node.execute(ctx);
+
+        assertThat(result.status()).isEqualTo(NodeStatus.SUCCESS);
+        assertThat(ctx.getAttrs()).containsEntry("run_retrieve", "false")
+                .containsEntry("run_tool", "true")
+                .containsEntry("run_guard", "true");
+    }
+
+    @Test
+    void runtimeFlagOn_guardStageNodeExecutesDelegateOnce() {
+        WorkflowContext ctx = workflowContext();
+        ctx.putAttr("run_guard", "true");
+        AtomicInteger guardCalls = new AtomicInteger();
+        AtomicInteger skipCalls = new AtomicInteger();
+        GuardStageNode node = new GuardStageNode(new GuardStageNode.GuardStageDelegate() {
+            @Override
+            public void stageGuard() {
+                guardCalls.incrementAndGet();
+            }
+
+            @Override
+            public void onGuardSkippedByPlan() {
+                skipCalls.incrementAndGet();
+            }
+        });
+
+        NodeResult result = node.execute(ctx);
+
+        assertThat(node.name()).isEqualTo("GUARD");
+        assertThat(result.status()).isEqualTo(NodeStatus.SUCCESS);
+        assertThat(guardCalls).hasValue(1);
+        assertThat(skipCalls).hasValue(0);
+        assertThat(ctx.getPolicyEvents()).isEmpty();
+        assertThat(ctx.getStageTraces()).isEmpty();
+    }
+
+    @Test
+    void runtimeFlagOn_guardStageNodeSkipDoesNotGenerateEventsOrPolicies() {
+        WorkflowContext ctx = workflowContext();
+        ctx.putAttr("run_guard", "false");
+        AtomicInteger guardCalls = new AtomicInteger();
+        AtomicInteger skipCalls = new AtomicInteger();
+        GuardStageNode node = new GuardStageNode(new GuardStageNode.GuardStageDelegate() {
+            @Override
+            public void stageGuard() {
+                guardCalls.incrementAndGet();
+            }
+
+            @Override
+            public void onGuardSkippedByPlan() {
+                skipCalls.incrementAndGet();
+            }
+        });
+
+        NodeResult result = node.execute(ctx);
+
+        assertThat(result.status()).isEqualTo(NodeStatus.SKIPPED);
+        assertThat(result.attrs()).containsEntry("reason", "skipped_by_plan");
+        assertThat(guardCalls).hasValue(0);
+        assertThat(skipCalls).hasValue(1);
+        assertThat(ctx.getPolicyEvents()).isEmpty();
+        assertThat(ctx.getStageTraces()).isEmpty();
+    }
+
+    @Test
+    void runtimeFlagOn_retrieveStageNodeExecutesDelegateOnce() {
+        WorkflowContext ctx = workflowContext();
+        ctx.putAttr("run_retrieve", "true");
+        AtomicInteger retrieveCalls = new AtomicInteger();
+        AtomicInteger skipCalls = new AtomicInteger();
+        RetrieveStageNode node = new RetrieveStageNode(new RetrieveStageNode.RetrieveStageDelegate() {
+            @Override
+            public void stageRetrieve() {
+                retrieveCalls.incrementAndGet();
+            }
+
+            @Override
+            public void onRetrieveSkippedByPlan() {
+                skipCalls.incrementAndGet();
+            }
+        });
+
+        NodeResult result = node.execute(ctx);
+
+        assertThat(node.name()).isEqualTo("RETRIEVE");
+        assertThat(result.status()).isEqualTo(NodeStatus.SUCCESS);
+        assertThat(retrieveCalls).hasValue(1);
+        assertThat(skipCalls).hasValue(0);
+        assertThat(ctx.getPolicyEvents()).isEmpty();
+        assertThat(ctx.getStageTraces()).isEmpty();
+    }
+
+    @Test
+    void runtimeFlagOn_retrieveStageNodeSkipDoesNotGenerateEventsOrPolicies() {
+        WorkflowContext ctx = workflowContext();
+        ctx.putAttr("run_retrieve", "false");
+        AtomicInteger retrieveCalls = new AtomicInteger();
+        AtomicInteger skipCalls = new AtomicInteger();
+        RetrieveStageNode node = new RetrieveStageNode(new RetrieveStageNode.RetrieveStageDelegate() {
+            @Override
+            public void stageRetrieve() {
+                retrieveCalls.incrementAndGet();
+            }
+
+            @Override
+            public void onRetrieveSkippedByPlan() {
+                skipCalls.incrementAndGet();
+            }
+        });
+
+        NodeResult result = node.execute(ctx);
+
+        assertThat(result.status()).isEqualTo(NodeStatus.SKIPPED);
+        assertThat(result.attrs()).containsEntry("reason", "skipped_by_plan");
+        assertThat(retrieveCalls).hasValue(0);
+        assertThat(skipCalls).hasValue(1);
+        assertThat(ctx.getPolicyEvents()).isEmpty();
+        assertThat(ctx.getStageTraces()).isEmpty();
+    }
+
+    @Test
+    void runtimeFlagOn_retrieveStageNodeDoesNotOwnRagGatePolicy() {
+        WorkflowContext ctx = workflowContext();
+        ctx.putAttr("run_retrieve", "true");
+        RetrieveStageNode node = new RetrieveStageNode(new RetrieveStageNode.RetrieveStageDelegate() {
+            @Override
+            public void stageRetrieve() {
+            }
+
+            @Override
+            public void onRetrieveSkippedByPlan() {
+            }
+        });
+
+        node.execute(ctx);
+
+        assertThat(ctx.getPolicyEvents()).isEmpty();
+    }
+
+    @Test
+    void runtimeFlagOn_toolStageNodeExecutesDelegateOnce() {
+        WorkflowContext ctx = workflowContext();
+        ctx.putAttr("run_tool", "true");
+        AtomicInteger toolCalls = new AtomicInteger();
+        AtomicInteger skipCalls = new AtomicInteger();
+        ToolStageNode node = new ToolStageNode(new ToolStageNode.ToolStageDelegate() {
+            @Override
+            public void stageTool() {
+                toolCalls.incrementAndGet();
+            }
+
+            @Override
+            public void onToolSkippedByPlan() {
+                skipCalls.incrementAndGet();
+            }
+        });
+
+        NodeResult result = node.execute(ctx);
+
+        assertThat(node.name()).isEqualTo("TOOL");
+        assertThat(result.status()).isEqualTo(NodeStatus.SUCCESS);
+        assertThat(toolCalls).hasValue(1);
+        assertThat(skipCalls).hasValue(0);
+        assertThat(ctx.getPolicyEvents()).isEmpty();
+        assertThat(ctx.getStageTraces()).isEmpty();
+        assertThat(ctx.getToolTraces()).isEmpty();
+    }
+
+    @Test
+    void runtimeFlagOn_toolStageNodeSkipDoesNotGenerateEventsPoliciesOrToolTrace() {
+        WorkflowContext ctx = workflowContext();
+        ctx.putAttr("run_tool", "false");
+        AtomicInteger toolCalls = new AtomicInteger();
+        AtomicInteger skipCalls = new AtomicInteger();
+        ToolStageNode node = new ToolStageNode(new ToolStageNode.ToolStageDelegate() {
+            @Override
+            public void stageTool() {
+                toolCalls.incrementAndGet();
+            }
+
+            @Override
+            public void onToolSkippedByPlan() {
+                skipCalls.incrementAndGet();
+            }
+        });
+
+        NodeResult result = node.execute(ctx);
+
+        assertThat(result.status()).isEqualTo(NodeStatus.SKIPPED);
+        assertThat(result.attrs()).containsEntry("reason", "skipped_by_plan");
+        assertThat(toolCalls).hasValue(0);
+        assertThat(skipCalls).hasValue(1);
+        assertThat(ctx.getPolicyEvents()).isEmpty();
+        assertThat(ctx.getStageTraces()).isEmpty();
+        assertThat(ctx.getToolTraces()).isEmpty();
+    }
+
+    @Test
     void runtimeFlagOn_capturesMarketDataToolTraceInternally() {
         TravelAgent.MainAgentTurnContext ctx = new TravelAgent.MainAgentTurnContext(
                 "conv-tool",
@@ -181,5 +430,16 @@ class TravelAgentWorkflowRuntimeR2Test {
                 "skipped_by_plan",
                 Map.of("reason", "skipped_by_plan")
         );
+    }
+
+    private static WorkflowContext workflowContext() {
+        return new WorkflowContext(WorkflowTask.of(
+                "finance_analyst_chat",
+                "v1",
+                "finance",
+                "req-guard",
+                "conv-guard",
+                "question"
+        ));
     }
 }
