@@ -1,8 +1,10 @@
 package com.travel.ai.agent;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
+import com.travel.ai.agent.guard.GuardDecisionRequest;
+import com.travel.ai.agent.guard.GuardDecisionResult;
+import com.travel.ai.agent.guard.GuardDecisionService;
 import com.travel.ai.agent.guard.RetrieveEmptyHitGate;
-import com.travel.ai.agent.guard.ToolPrefacePayload;
 import com.travel.ai.agent.plan.MainLinePlanProposer;
 import com.travel.ai.config.AppAgentProperties;
 import com.travel.ai.profile.ProfileExtractionCoordinator;
@@ -121,6 +123,7 @@ public class TravelAgent implements FinancialAnalystAgent {
     private final UserProfileService userProfileService;
     private final ProfileExtractionCoordinator profileExtractionCoordinator;
     private final LinearWorkflowRuntime linearWorkflowRuntime = new LinearWorkflowRuntime();
+    private final GuardDecisionService guardDecisionService = new GuardDecisionService();
 
     @Value("${app.tools.weather.enabled:true}")
     private boolean weatherToolEnabled;
@@ -655,12 +658,7 @@ public class TravelAgent implements FinancialAnalystAgent {
     }
 
     private static boolean shouldApplyMarketDataOutputGuard(String toolPreface) {
-        if (toolPreface == null || toolPreface.isBlank()) {
-            return false;
-        }
-        return toolPreface.contains("name=market_data")
-                || toolPreface.contains("mockMode=true")
-                || toolPreface.contains("mock_market_data=true");
+        return GuardDecisionService.shouldApplyMarketDataOutputGuard(toolPreface);
     }
 
     private void logStageBoundary(StageName stage, long startNs, MainAgentTurnContext ctx) {
@@ -972,30 +970,20 @@ public class TravelAgent implements FinancialAnalystAgent {
         long t0 = System.nanoTime();
         log.info("[stage] GUARD start requestId={}", ctx.requestId);
 
-        RetrieveEmptyHitGate.Decision d = RetrieveEmptyHitGate.decide(ctx.docs, ctx.toolPreface, emptyHitsBehavior);
-        ctx.skipLlmForEmptyHits = d.skipLlm();
-        ctx.emptyHitsClarifyBody = d.clarifyBody() != null ? d.clarifyBody() : "";
-        ctx.emptyHitsGateLogCode = d.skipGateErrorCode();
-        String reason = d.reason() != null ? d.reason().name().toLowerCase(java.util.Locale.ROOT) : "";
-        String behavior = d.skipLlm() ? "clarify" : "answer";
-        ctx.policyEvents.add(PolicyEvent.of(
-                        "rag_gate",
-                        PolicyStageAnchor.POST_RETRIEVE.wireValue(),
-                        behavior,
-                        reason,
-                        d.skipGateErrorCode(),
-                        ctx.requestId
-                )
-                .withAttr("retrieve_hit_count", String.valueOf(ctx.docs != null ? ctx.docs.size() : 0))
-                .withAttr("tool_payload_present", String.valueOf(ToolPrefacePayload.hasSubstantiveBody(ctx.toolPreface)))
-                .withAttr("empty_hits_behavior", emptyHitsBehavior != null ? emptyHitsBehavior : "")
-                .withAttr("skip_llm", String.valueOf(d.skipLlm()))
-                .withAttr("reason", reason));
-        appendFinanceGuardForMarketData(ctx);
-        switch (d.reason()) {
+        GuardDecisionResult decision = guardDecisionService.decide(new GuardDecisionRequest(
+                ctx.docs,
+                ctx.toolPreface,
+                emptyHitsBehavior,
+                ctx.requestId
+        ));
+        ctx.skipLlmForEmptyHits = decision.skipLlm();
+        ctx.emptyHitsClarifyBody = decision.clarifyBody() != null ? decision.clarifyBody() : "";
+        ctx.emptyHitsGateLogCode = decision.emptyHitsGateLogCode();
+        ctx.policyEvents.addAll(decision.policyEvents());
+        switch (decision.reason()) {
             case APPLIED_CLARIFY_RAG_EMPTY, APPLIED_CLARIFY_TOOL_NO_PAYLOAD -> log.info(
                     "[guard] empty_hits gate=clarify error_code={} requestId={}",
-                    d.skipGateErrorCode(), ctx.requestId);
+                    decision.emptyHitsGateLogCode(), ctx.requestId);
             case SKIPPED_TOOL_SUBSTANTIVE_PAYLOAD -> log.info(
                     "[guard] empty_hits skipped gate tool_data_present requestId={}", ctx.requestId);
             case SKIPPED_HAS_RETRIEVAL_HITS -> log.debug("[guard] retrieve_hits>0 requestId={}", ctx.requestId);
@@ -1004,27 +992,6 @@ public class TravelAgent implements FinancialAnalystAgent {
         }
 
         logStageBoundary(StageName.GUARD, t0, ctx);
-    }
-
-    private void appendFinanceGuardForMarketData(MainAgentTurnContext ctx) {
-        if (ctx == null || !shouldApplyMarketDataOutputGuard(ctx.toolPreface)) {
-            return;
-        }
-        ctx.policyEvents.add(PolicyEvent.of(
-                        "finance_guard",
-                        "guard",
-                        "allow",
-                        "market_data_mock_disclosure",
-                        null,
-                        ctx.requestId
-                )
-                .withAttr("workflow_id", "market_data_explain")
-                .withAttr("connector", "market_data")
-                .withAttr("mock_mode", "true")
-                .withAttr("freshness", "mock_non_realtime")
-                .withAttr("tradable", "false")
-                .withAttr("disclosure_required", "true")
-                .withAttr("investment_advice_allowed", "false"));
     }
 
     /**
