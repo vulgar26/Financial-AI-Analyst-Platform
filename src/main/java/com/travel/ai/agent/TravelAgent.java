@@ -6,9 +6,15 @@ import com.travel.ai.agent.guard.GuardDecisionResult;
 import com.travel.ai.agent.guard.GuardDecisionService;
 import com.travel.ai.agent.guard.RetrieveEmptyHitGate;
 import com.travel.ai.agent.plan.MainLinePlanProposer;
+import com.travel.ai.agent.plan.PlanService;
+import com.travel.ai.agent.plan.PlanServiceRequest;
+import com.travel.ai.agent.plan.PlanServiceResult;
 import com.travel.ai.agent.prompt.PromptAssemblyRequest;
 import com.travel.ai.agent.prompt.PromptAssemblyResult;
 import com.travel.ai.agent.prompt.PromptAssemblyService;
+import com.travel.ai.agent.retrieve.RetrieveRequest;
+import com.travel.ai.agent.retrieve.RetrieveResult;
+import com.travel.ai.agent.retrieve.RetrieveService;
 import com.travel.ai.agent.tool.ToolInvocationRequest;
 import com.travel.ai.agent.tool.ToolInvocationResult;
 import com.travel.ai.agent.tool.ToolInvocationService;
@@ -31,7 +37,6 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.beans.factory.annotation.Value;
@@ -68,7 +73,6 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
 
 import static com.travel.ai.tools.ToolObservability.log;
 
@@ -82,7 +86,7 @@ import static com.travel.ai.tools.ToolObservability.log;
  * <p>
  * 大白话：用户一问进来，服务端按固定几步处理——先产出结构化计划（可配置调用 LLM）、再查资料、再按需调工具、再过门控（默认「知识库零命中则澄清不调 LLM」）、最后才调大模型流式写回答。SSE 上在引用与正文之前先发 {@code event: plan_parse} 携带解析元数据，便于与评测对账。
  * <p>
- * 检索合并阶段使用 {@link #mergeAndDedupeDocuments(List, int)}：按文档 id（无 id 时退化为正文 hash）
+ * 检索合并阶段使用 {@link RetrieveService}：按文档 id（无 id 时退化为正文 hash）
  * 显式去重，避免依赖 {@link Document#equals} 实现细节（UPGRADE P2-2）。
  */
 // Historical class name retained for compatibility.
@@ -113,19 +117,17 @@ public class TravelAgent implements FinancialAnalystAgent {
 
     private final ChatClient chatClient;
     private final ChatMemory chatMemory;
-    private final VectorStore vectorStore;
-    private final QueryRewriter queryRewriter;
     private final WeatherTool weatherTool;
     private final MarketDataTool marketDataTool;
     private final com.travel.ai.tools.ToolCircuitBreaker toolCircuitBreaker;
     private final com.travel.ai.tools.ToolRateLimiter toolRateLimiter;
-    private final MainLinePlanProposer mainLinePlanProposer;
-    private final PlanParseCoordinator planParseCoordinator;
     private final PlanParser planParser;
     private final AppAgentProperties appAgentProperties;
     private final ProfileExtractionCoordinator profileExtractionCoordinator;
     private final LinearWorkflowRuntime linearWorkflowRuntime = new LinearWorkflowRuntime();
     private final GuardDecisionService guardDecisionService = new GuardDecisionService();
+    private final PlanService planService;
+    private final RetrieveService retrieveService;
     private final ToolInvocationService toolInvocationService;
     private final PromptAssemblyService promptAssemblyService;
 
@@ -178,17 +180,15 @@ public class TravelAgent implements FinancialAnalystAgent {
                        UserProfileService userProfileService,
                        ProfileExtractionCoordinator profileExtractionCoordinator) {
         this.chatMemory = chatMemory;
-        this.vectorStore = vectorStore;
-        this.queryRewriter = queryRewriter;
         this.weatherTool = weatherTool;
         this.marketDataTool = marketDataTool;
         this.toolCircuitBreaker = toolCircuitBreaker;
         this.toolRateLimiter = toolRateLimiter;
-        this.mainLinePlanProposer = mainLinePlanProposer;
-        this.planParseCoordinator = planParseCoordinator;
         this.planParser = planParser;
         this.appAgentProperties = appAgentProperties;
         this.profileExtractionCoordinator = profileExtractionCoordinator;
+        this.planService = new PlanService(mainLinePlanProposer, planParseCoordinator);
+        this.retrieveService = new RetrieveService(queryRewriter, vectorStore);
         this.toolInvocationService = new ToolInvocationService(
                 weatherTool,
                 marketDataTool,
@@ -629,7 +629,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         ctx.docs = List.of();
         ctx.retrieveMs = 0;
         ctx.promptBase = ctx.userMessage != null ? ctx.userMessage : "";
-        ctx.citationBlock = buildCitationBlock(ctx.docs);
+        ctx.citationBlock = "【引用片段】\n（本轮未命中知识库）\n\n";
         log.info("检索到 {} 条知识，queries={}", ctx.docs.size(), ctx.queries);
         log.info("[perf] rewrite_ms={} retrieve_ms={} doc_count={} requestId={}",
                 ctx.rewriteMs, ctx.retrieveMs, ctx.docs.size(), ctx.requestId);
@@ -676,81 +676,17 @@ public class TravelAgent implements FinancialAnalystAgent {
     private void stagePlan(MainAgentTurnContext ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] PLAN start requestId={}", ctx.requestId);
-        String planDraftSource;
-        if (appAgentProperties.getPlanStage().isEnabled()) {
-            try {
-                ctx.planJson = mainLinePlanProposer.proposePlanJson(ctx.userMessage, ctx.requestId);
-                planDraftSource = "llm";
-                log.info("[stage] PLAN source=llm requestId={}", ctx.requestId);
-            } catch (Exception e) {
-                ctx.planJson = fallbackPlanJson("llm_failed");
-                planDraftSource = "fallback_llm_error";
-                log.warn("[stage] PLAN source=fallback_llm_error requestId={} error={}", ctx.requestId, e.toString());
-            }
-        } else {
-            ctx.planJson = fallbackPlanJson("plan_stage_disabled");
-            planDraftSource = "config_disabled";
-            log.info("[stage] PLAN source=config_disabled requestId={}", ctx.requestId);
-        }
-        enforceAppendixEPlanOrFallback(ctx, planDraftSource);
-        logStageBoundary(StageName.PLAN, t0, ctx);
-    }
-
-    /**
-     * 附录 E：与评测一致经 {@link PlanParseCoordinator}（parse + 至多一次 repair）得到可注入的 plan 文本；
-     * 仍失败则降级 {@link #fallbackPlanJson}，再失败则用 {@link PlanParseCoordinator#DEFAULT_EVAL_PLAN_JSON}。
-     * <p>
-     * 日志字段 {@code plan_parse_outcome} / {@code plan_parse_attempts} 与评测 {@code meta} 同名口径对齐，便于对账。
-     *
-     * @param planDraftSource {@code llm} | {@code config_disabled} | {@code fallback_llm_error}（草案来源，非解析结果）
-     */
-    private void enforceAppendixEPlanOrFallback(MainAgentTurnContext ctx, String planDraftSource) {
-        PlanParseCoordinator.Result first = planParseCoordinator.parseWithOptionalRepair(ctx.planJson);
-        if (!first.failed()) {
-            ctx.planJson = first.effectivePlanJson();
-            recordPlanParseMeta(ctx, planDraftSource, first, "primary");
-            logPlanParseResolution(ctx.requestId, planDraftSource, first, "primary");
-            return;
-        }
-        log.warn("[plan] draft_source={} plan_parse_outcome={} plan_parse_attempts={} requestId={} parse_error={}",
-                planDraftSource,
-                first.outcome(),
-                first.attempts(),
+        PlanServiceResult result = planService.plan(new PlanServiceRequest(
+                ctx.userMessage,
                 ctx.requestId,
-                first.lastFailure() != null ? first.lastFailure().getMessage() : "");
-        PlanParseCoordinator.Result second = planParseCoordinator.parseWithOptionalRepair(fallbackPlanJson("plan_parse_rejected"));
-        if (!second.failed()) {
-            ctx.planJson = second.effectivePlanJson();
-            recordPlanParseMeta(ctx, planDraftSource, second, "fallback_template");
-            logPlanParseResolution(ctx.requestId, planDraftSource, second, "fallback_template");
-            return;
-        }
-        String minimal = PlanParseCoordinator.DEFAULT_EVAL_PLAN_JSON.trim().replaceAll("\\s+", " ");
-        PlanParseCoordinator.Result third = planParseCoordinator.parseWithOptionalRepair(minimal);
-        if (!third.failed()) {
-            ctx.planJson = third.effectivePlanJson();
-            recordPlanParseMeta(ctx, planDraftSource, third, "builtin_minimal");
-            logPlanParseResolution(ctx.requestId, planDraftSource, third, "builtin_minimal");
-            return;
-        }
-        throw new IllegalStateException("builtin default plan must parse");
-    }
-
-    /**
-     * 与评测 {@code meta.plan_parse_outcome} / {@code meta.plan_parse_attempts} 对齐的 INFO 行（主线无 meta 时靠日志对账）。
-     */
-    private static void logPlanParseResolution(
-            String requestId,
-            String planDraftSource,
-            PlanParseCoordinator.Result r,
-            String resolved
-    ) {
-        log.info("[plan] draft_source={} plan_parse_outcome={} plan_parse_attempts={} resolved={} requestId={}",
-                planDraftSource,
-                r.outcome(),
-                r.attempts(),
-                resolved,
-                requestId);
+                appAgentProperties.getPlanStage().isEnabled()
+        ));
+        ctx.planJson = result.planJson();
+        ctx.planDraftSource = result.planDraftSource();
+        ctx.planParseOutcome = result.planParseOutcome();
+        ctx.planParseAttempts = result.planParseAttempts();
+        ctx.planParseResolved = result.planParseResolved();
+        logStageBoundary(StageName.PLAN, t0, ctx);
     }
 
     /**
@@ -771,38 +707,6 @@ public class TravelAgent implements FinancialAnalystAgent {
                 .build();
     }
 
-    private static void recordPlanParseMeta(
-            MainAgentTurnContext ctx,
-            String planDraftSource,
-            PlanParseCoordinator.Result r,
-            String resolved
-    ) {
-        ctx.planDraftSource = planDraftSource != null ? planDraftSource : "";
-        ctx.planParseOutcome = r.outcome() != null ? r.outcome() : "";
-        ctx.planParseAttempts = r.attempts();
-        ctx.planParseResolved = resolved != null ? resolved : "";
-    }
-
-    private static String jsonEscapeForNotes(String s) {
-        if (s == null) {
-            return "";
-        }
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
-    }
-
-    /** 附录 E 兼容降级：两阶段 RETRIEVE→WRITE，constraints 与 {@link PlanParser} 校验一致。 */
-    private static String fallbackPlanJson(String rationale) {
-        String n = jsonEscapeForNotes(rationale);
-        return "{\"plan_version\":\"v1\",\"goal\":\"（配置或降级）\","
-                + "\"steps\":["
-                + "{\"step_id\":\"fb1\",\"stage\":\"RETRIEVE\",\"instruction\":\"检索与用户问题相关的知识片段。\"},"
-                + "{\"step_id\":\"fb2\",\"stage\":\"WRITE\",\"instruction\":\"基于检索结果与工具观察生成回答。\"}"
-                + "],"
-                + "\"constraints\":{\"max_steps\":8,\"total_timeout_ms\":120000,\"tool_timeout_ms\":3000},"
-                + "\"notes\":\"" + n + "\""
-                + "}";
-    }
-
     /**
      * RETRIEVE：查询改写 + 向量检索 + 去重截断 + 拼出不带工具前缀的 {@code promptBase}，并生成 SSE 用 {@code citationBlock}。
      */
@@ -810,47 +714,30 @@ public class TravelAgent implements FinancialAnalystAgent {
         long t0 = System.nanoTime();
         log.info("[stage] RETRIEVE start requestId={}", ctx.requestId);
 
-        long tRewrite0 = System.nanoTime();
-        ctx.queries = queryRewriter.rewrite(ctx.userMessage);
-        ctx.rewriteMs = (System.nanoTime() - tRewrite0) / 1_000_000L;
-
         ctx.currentUser = org.springframework.security.core.context.SecurityContextHolder
                 .getContext()
                 .getAuthentication() != null
                 ? org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getName()
                 : "anonymous";
-
+        RetrieveResult result = retrieveService.retrieve(new RetrieveRequest(
+                ctx.userMessage,
+                ctx.currentUser,
+                ctx.requestId,
+                MAX_CONTEXT_DOCS,
+                2
+        ));
+        ctx.currentUser = result.currentUser();
         ctx.userFilter = new Filter.Expression(
                 Filter.ExpressionType.EQ,
                 new Filter.Key("user_id"),
                 new Filter.Value(ctx.currentUser)
         );
-
-        long tRetrieve0 = System.nanoTime();
-        List<Document> flat = ctx.queries.stream()
-                .flatMap(query -> vectorStore.similaritySearch(
-                        SearchRequest.builder()
-                                .query(query)
-                                .topK(2)
-                                .filterExpression(ctx.userFilter)
-                                .build()
-                ).stream())
-                .collect(Collectors.toList());
-        ctx.docs = mergeAndDedupeDocuments(flat, MAX_CONTEXT_DOCS);
-        ctx.retrieveMs = (System.nanoTime() - tRetrieve0) / 1_000_000L;
-        log.info("检索到 {} 条知识，queries={}", ctx.docs.size(), ctx.queries);
-        log.info("[perf] rewrite_ms={} retrieve_ms={} doc_count={} requestId={}",
-                ctx.rewriteMs, ctx.retrieveMs, ctx.docs.size(), ctx.requestId);
-
-        String context = ctx.docs.stream()
-                .map(Document::getText)
-                .collect(Collectors.joining("\n"));
-
-        ctx.promptBase = context.isEmpty()
-                ? ctx.userMessage
-                : "【研究参考资料】\n" + context + "\n\n【用户问题】\n" + ctx.userMessage;
-
-        ctx.citationBlock = buildCitationBlock(ctx.docs);
+        ctx.queries = result.queries();
+        ctx.docs = result.docs();
+        ctx.promptBase = result.promptBase();
+        ctx.citationBlock = result.citationBlock();
+        ctx.rewriteMs = result.rewriteMs();
+        ctx.retrieveMs = result.retrieveMs();
 
         logStageBoundary(StageName.RETRIEVE, t0, ctx);
     }
@@ -1077,7 +964,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         /** PLAN 阶段产出的 JSON 文本（含 {@code steps} 数组），并入 WRITE 前最终 prompt。 */
         String planJson;
 
-        /** 与评测 {@code meta} 及 SSE {@code event:plan_parse} 对齐的附录 E 解析结论（在 {@link #enforceAppendixEPlanOrFallback} 末次成功路径写入）。 */
+        /** 与评测 {@code meta} 及 SSE {@code event:plan_parse} 对齐的附录 E 解析结论（由 {@link PlanService} 写回）。 */
         String planDraftSource;
         String planParseOutcome;
         int planParseAttempts;
@@ -1121,52 +1008,4 @@ public class TravelAgent implements FinancialAnalystAgent {
         return "北京";
     }
 
-    /**
-     * 多路检索结果合并去重：优先用 {@link Document#getId()} 作为稳定键；无 id 时用正文 hash，避免同一段文本重复进入上下文。
-     * 使用 LinkedHashMap 保持「首次出现」顺序，便于与检索先后大致对应。
-     */
-    private List<Document> mergeAndDedupeDocuments(List<Document> documents, int maxDocs) {
-        Map<String, Document> seen = new LinkedHashMap<>();
-        for (Document d : documents) {
-            if (d == null) {
-                continue;
-            }
-            String key;
-            if (d.getId() != null && !d.getId().isBlank()) {
-                key = "id:" + d.getId();
-            } else {
-                String text = d.getText() != null ? d.getText() : "";
-                key = "text:" + text.hashCode();
-            }
-            seen.putIfAbsent(key, d);
-        }
-        return new ArrayList<>(seen.values()).subList(0, Math.min(maxDocs, seen.size()));
-    }
-
-    /**
-     * 将本轮用于拼 prompt 的检索结果，以纯文本块形式前置输出（SSE 首段 data）。
-     */
-    private String buildCitationBlock(List<Document> docs) {
-        if (docs == null || docs.isEmpty()) {
-            return "【引用片段】\n（本轮未命中知识库）\n\n";
-        }
-        StringBuilder sb = new StringBuilder();
-        sb.append("【引用片段】（共 ").append(docs.size()).append(" 条）\n");
-        int i = 1;
-        for (Document d : docs) {
-            String id = d.getId() != null ? d.getId() : "(无id)";
-            Object src = d.getMetadata() != null ? d.getMetadata().get("source_name") : null;
-            String preview = d.getText() != null ? d.getText() : "";
-            if (preview.length() > 200) {
-                preview = preview.substring(0, 200) + "…";
-            }
-            sb.append("[").append(i++).append("] id=").append(id);
-            if (src != null) {
-                sb.append(" 来源=").append(src);
-            }
-            sb.append("\n").append(preview).append("\n\n");
-        }
-        sb.append("────────\n");
-        return sb.toString();
-    }
 }
