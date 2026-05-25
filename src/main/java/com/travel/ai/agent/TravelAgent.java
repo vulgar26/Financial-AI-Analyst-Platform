@@ -6,6 +6,9 @@ import com.travel.ai.agent.guard.GuardDecisionResult;
 import com.travel.ai.agent.guard.GuardDecisionService;
 import com.travel.ai.agent.guard.RetrieveEmptyHitGate;
 import com.travel.ai.agent.plan.MainLinePlanProposer;
+import com.travel.ai.agent.prompt.PromptAssemblyRequest;
+import com.travel.ai.agent.prompt.PromptAssemblyResult;
+import com.travel.ai.agent.prompt.PromptAssemblyService;
 import com.travel.ai.agent.tool.ToolInvocationRequest;
 import com.travel.ai.agent.tool.ToolInvocationResult;
 import com.travel.ai.agent.tool.ToolInvocationService;
@@ -120,11 +123,11 @@ public class TravelAgent implements FinancialAnalystAgent {
     private final PlanParseCoordinator planParseCoordinator;
     private final PlanParser planParser;
     private final AppAgentProperties appAgentProperties;
-    private final UserProfileService userProfileService;
     private final ProfileExtractionCoordinator profileExtractionCoordinator;
     private final LinearWorkflowRuntime linearWorkflowRuntime = new LinearWorkflowRuntime();
     private final GuardDecisionService guardDecisionService = new GuardDecisionService();
     private final ToolInvocationService toolInvocationService;
+    private final PromptAssemblyService promptAssemblyService;
 
     @Value("${app.tools.weather.enabled:true}")
     private boolean weatherToolEnabled;
@@ -185,7 +188,6 @@ public class TravelAgent implements FinancialAnalystAgent {
         this.planParseCoordinator = planParseCoordinator;
         this.planParser = planParser;
         this.appAgentProperties = appAgentProperties;
-        this.userProfileService = userProfileService;
         this.profileExtractionCoordinator = profileExtractionCoordinator;
         this.toolInvocationService = new ToolInvocationService(
                 weatherTool,
@@ -193,6 +195,7 @@ public class TravelAgent implements FinancialAnalystAgent {
                 toolCircuitBreaker,
                 toolRateLimiter
         );
+        this.promptAssemblyService = new PromptAssemblyService(userProfileService);
         this.chatClient = builder
                 .defaultSystem(SYSTEM_PROMPT)
                 .defaultAdvisors(
@@ -647,25 +650,13 @@ public class TravelAgent implements FinancialAnalystAgent {
     }
 
     private void mergeFinalPromptFromCtx(MainAgentTurnContext ctx) {
-        String profileBlock = userProfileService.buildPromptPrefixBlock(ctx.currentUser);
-        String planBlock = (ctx.planJson != null && !ctx.planJson.isBlank())
-                ? "【本轮执行计划（结构化，须遵守）】\n" + ctx.planJson + "\n\n"
-                : "";
-        String financeOutputGuardBlock = shouldApplyMarketDataOutputGuard(ctx.toolPreface)
-                ? """
-                【金融输出约束】
-                - 本轮行情/市场数据来自本地 mock，不是实时数据。
-                - 这些数据不可用于交易决策，最终回答中必须包含“不可用于交易决策”或“不能作为交易依据”。
-                - 不得输出买入、卖出、持有、仓位、止盈止损等交易建议。
-                - 回答结尾必须说明：内容仅供研究和教育参考，不构成投资建议。
-
-                """
-                : "";
-        ctx.finalPromptForLlm = profileBlock + ctx.toolPreface + financeOutputGuardBlock + planBlock + ctx.promptBase;
-    }
-
-    private static boolean shouldApplyMarketDataOutputGuard(String toolPreface) {
-        return GuardDecisionService.shouldApplyMarketDataOutputGuard(toolPreface);
+        PromptAssemblyResult result = promptAssemblyService.assemble(new PromptAssemblyRequest(
+                ctx.currentUser,
+                ctx.toolPreface,
+                ctx.planJson,
+                ctx.promptBase
+        ));
+        ctx.finalPromptForLlm = result.finalPromptForLlm();
     }
 
     private void logStageBoundary(StageName stage, long startNs, MainAgentTurnContext ctx) {
