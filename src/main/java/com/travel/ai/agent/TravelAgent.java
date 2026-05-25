@@ -15,6 +15,7 @@ import com.travel.ai.agent.prompt.PromptAssemblyService;
 import com.travel.ai.agent.retrieve.RetrieveRequest;
 import com.travel.ai.agent.retrieve.RetrieveResult;
 import com.travel.ai.agent.retrieve.RetrieveService;
+import com.travel.ai.agent.state.WorkflowTurnState;
 import com.travel.ai.agent.tool.ToolInvocationRequest;
 import com.travel.ai.agent.tool.ToolInvocationResult;
 import com.travel.ai.agent.tool.ToolInvocationService;
@@ -67,18 +68,16 @@ import com.travel.ai.web.RequestTraceFilter;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.concurrent.TimeoutException;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static com.travel.ai.tools.ToolObservability.log;
 
 /**
  * 金融分析 Agent 编排：主线采用<strong>固定线性阶段</strong>（P0-1 编排骨架），逻辑顺序为
- * {@code PLAN → RETRIEVE → TOOL → GUARD → WRITE}，由 {@link TravelAgent#runLinearStages(MainAgentTurnContext)}
+ * {@code PLAN → RETRIEVE → TOOL → GUARD → WRITE}，由 {@link TravelAgent#runLinearStages(WorkflowTurnState)}
  * 串行推进；禁止用「阶段名 → 处理器」的 Map 或动态跳转驱动执行（避免退化成 DAG/状态机）。
  * <p>
  * 在附录 E {@code steps[*].stage} 未声明某阶段时，<strong>物理跳过</strong>该阶段（见 {@link PlanPhysicalStagePolicy}；{@code GUARD}
@@ -212,7 +211,7 @@ public class TravelAgent implements FinancialAnalystAgent {
     }
 
     /**
-     * 单轮 SSE 对话入口：只做 MDC、构造 {@link MainAgentTurnContext}，再按固定顺序跑阶段，最后组装 SSE。
+     * 单轮 SSE 对话入口：只做 MDC、构造 {@link WorkflowTurnState}，再按固定顺序跑阶段，最后组装 SSE。
      */
     @Override
     public Flux<ServerSentEvent<String>> chat(String conversationId, String userMessage) {
@@ -250,7 +249,7 @@ public class TravelAgent implements FinancialAnalystAgent {
 
         final String profileExtractionUsername = currentUsernameForProfileHook();
 
-        MainAgentTurnContext ctx = new MainAgentTurnContext(conversationId, userMessage, requestId);
+        WorkflowTurnState ctx = new WorkflowTurnState(conversationId, userMessage, requestId);
         try {
             if (shouldUseWorkflowRuntime(appAgentProperties)) {
                 runLinearStagesWithRuntime(ctx);
@@ -408,7 +407,7 @@ public class TravelAgent implements FinancialAnalystAgent {
      * P0-1：在固定顺序下串行推进各阶段；是否<strong>真正执行</strong> RETRIEVE/TOOL/GUARD 由解析后的 plan {@code steps} 决定
      * （{@link PlanPhysicalStagePolicy}）。
      */
-    private void runLinearStages(MainAgentTurnContext ctx) {
+    private void runLinearStages(WorkflowTurnState ctx) {
         ctx.stageEvents.add(StageEvent.start(StageName.PLAN, ctx.requestId));
         stagePlan(ctx);
         // stagePlan 内部会记录 plan_parse_* 元数据；阶段结束事件在此统一写入
@@ -447,7 +446,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         }
     }
 
-    private void runLinearStagesWithRuntime(MainAgentTurnContext ctx) {
+    private void runLinearStagesWithRuntime(WorkflowTurnState ctx) {
         ctx.workflowRuntimePath = true;
         WorkflowTask task = WorkflowTask.of(
                 "finance_analyst_chat",
@@ -523,7 +522,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         return properties != null && properties.getWorkflowRuntime().isEnabled();
     }
 
-    static void captureRuntimeStageTraces(MainAgentTurnContext ctx, List<StageTrace> traces) {
+    static void captureRuntimeStageTraces(WorkflowTurnState ctx, List<StageTrace> traces) {
         if (ctx == null || traces == null || traces.isEmpty()) {
             return;
         }
@@ -531,7 +530,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         ctx.runtimeStageTraces.addAll(traces);
     }
 
-    static void captureRuntimeToolTrace(MainAgentTurnContext ctx, ToolResult result) {
+    static void captureRuntimeToolTrace(WorkflowTurnState ctx, ToolResult result) {
         if (ctx == null || !ctx.workflowRuntimePath || result == null) {
             return;
         }
@@ -606,12 +605,12 @@ public class TravelAgent implements FinancialAnalystAgent {
         return "skipped_by_plan";
     }
 
-    private void applyRetrieveSkipped(MainAgentTurnContext ctx) {
+    private void applyRetrieveSkipped(WorkflowTurnState ctx) {
         applyRetrieveSkippedState(ctx);
         ctx.stageEvents.add(StageEvent.skip(StageName.RETRIEVE, ctx.requestId, "skipped_by_plan"));
     }
 
-    private void applyRetrieveSkippedState(MainAgentTurnContext ctx) {
+    private void applyRetrieveSkippedState(WorkflowTurnState ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] RETRIEVE skipped_by_plan requestId={}", ctx.requestId);
         ctx.queries = List.of();
@@ -636,12 +635,12 @@ public class TravelAgent implements FinancialAnalystAgent {
         logStageBoundary(StageName.RETRIEVE, t0, ctx);
     }
 
-    private void applyToolSkipped(MainAgentTurnContext ctx) {
+    private void applyToolSkipped(WorkflowTurnState ctx) {
         applyToolSkippedState(ctx);
         ctx.stageEvents.add(StageEvent.skip(StageName.TOOL, ctx.requestId, "skipped_by_plan"));
     }
 
-    private void applyToolSkippedState(MainAgentTurnContext ctx) {
+    private void applyToolSkippedState(WorkflowTurnState ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] TOOL skipped_by_plan requestId={}", ctx.requestId);
         ctx.toolPreface = "";
@@ -649,7 +648,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         logStageBoundary(StageName.TOOL, t0, ctx);
     }
 
-    private void mergeFinalPromptFromCtx(MainAgentTurnContext ctx) {
+    private void mergeFinalPromptFromCtx(WorkflowTurnState ctx) {
         PromptAssemblyResult result = promptAssemblyService.assemble(new PromptAssemblyRequest(
                 ctx.currentUser,
                 ctx.toolPreface,
@@ -659,7 +658,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         ctx.finalPromptForLlm = result.finalPromptForLlm();
     }
 
-    private void logStageBoundary(StageName stage, long startNs, MainAgentTurnContext ctx) {
+    private void logStageBoundary(StageName stage, long startNs, WorkflowTurnState ctx) {
         long ms = (System.nanoTime() - startNs) / 1_000_000L;
         String requestId = ctx != null ? ctx.requestId : "";
         log.info("[stage] {} done elapsed_ms={} requestId={}", stage, ms, requestId);
@@ -673,7 +672,7 @@ public class TravelAgent implements FinancialAnalystAgent {
      * {@code app.agent.plan-stage.enabled=false} 或模型失败时使用本地降级 JSON；最后经 {@link PlanParseCoordinator}
      * 做附录 E 校验与至多一次 repair（与评测路径一致），仍失败则再降级为内置合法 JSON。
      */
-    private void stagePlan(MainAgentTurnContext ctx) {
+    private void stagePlan(WorkflowTurnState ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] PLAN start requestId={}", ctx.requestId);
         PlanServiceResult result = planService.plan(new PlanServiceRequest(
@@ -693,7 +692,7 @@ public class TravelAgent implements FinancialAnalystAgent {
      * 与评测 {@code meta.plan_parse_outcome} / {@code meta.plan_parse_attempts} 同名字段，另含 {@code plan_draft_source}、
      * {@code plan_parse_resolved}（与日志 {@code [plan]} {@code resolved=} 对齐），便于 harness 对账。
      */
-    private static ServerSentEvent<String> buildPlanParseMetaEvent(MainAgentTurnContext ctx) {
+    private static ServerSentEvent<String> buildPlanParseMetaEvent(WorkflowTurnState ctx) {
         PlanParseEvent e = PlanParseEvent.of(
                 ctx.planParseOutcome,
                 ctx.planParseAttempts,
@@ -710,7 +709,7 @@ public class TravelAgent implements FinancialAnalystAgent {
     /**
      * RETRIEVE：查询改写 + 向量检索 + 去重截断 + 拼出不带工具前缀的 {@code promptBase}，并生成 SSE 用 {@code citationBlock}。
      */
-    private void stageRetrieve(MainAgentTurnContext ctx) {
+    private void stageRetrieve(WorkflowTurnState ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] RETRIEVE start requestId={}", ctx.requestId);
 
@@ -745,7 +744,7 @@ public class TravelAgent implements FinancialAnalystAgent {
     /**
      * TOOL：系统受控工具；产出 {@code toolPreface}，与 PLAN 的 {@code planJson} 及 {@code promptBase} 合并为 {@code finalPromptForLlm}。
      */
-    private void stageTool(MainAgentTurnContext ctx) {
+    private void stageTool(WorkflowTurnState ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] TOOL start requestId={}", ctx.requestId);
 
@@ -773,7 +772,7 @@ public class TravelAgent implements FinancialAnalystAgent {
      * GUARD：检索零命中门控（P0 默认 clarify）；仅当 TOOL 的 {@code BEGIN_TOOL_DATA} 与 {@code END_TOOL_DATA} 之间有<strong>非空</strong>正文时放行 LLM，
      * 避免「工具 outcome=ERROR 且 payload 空」仍走大模型编造实时数据。
      */
-    private void stageGuard(MainAgentTurnContext ctx) {
+    private void stageGuard(WorkflowTurnState ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] GUARD start requestId={}", ctx.requestId);
 
@@ -806,7 +805,7 @@ public class TravelAgent implements FinancialAnalystAgent {
      * 门控路径的 {@link #appendTurnToMemory} 在 {@link #chat} 中于订阅前同步调用，不在此链路的 {@code doOnComplete} 上挂载。
      */
     private Flux<String> stageWrite(
-            MainAgentTurnContext ctx,
+            WorkflowTurnState ctx,
             Duration llmTimeout,
             AtomicLong llmStartNs,
             AtomicBoolean firstLlmToken
@@ -898,7 +897,7 @@ public class TravelAgent implements FinancialAnalystAgent {
      * 零命中门控路径未经过 ChatClient，需自行写入本轮 user/assistant，与 {@link MessageChatMemoryAdvisor} 行为对齐。
      * 由 {@link #chat} 在 {@code skipLlmForEmptyHits} 分支同步调用一次（勿再挂到响应式 {@code doOnComplete}，以免多订阅重复写入 Redis）。
      */
-    private void appendTurnToMemory(MainAgentTurnContext ctx) {
+    private void appendTurnToMemory(WorkflowTurnState ctx) {
         if (!ctx.emptyHitsMemoryWritten.compareAndSet(false, true)) {
             return;
         }
@@ -916,7 +915,7 @@ public class TravelAgent implements FinancialAnalystAgent {
      * 承载单轮对话在各阶段之间传递的状态（mutable context object）。
      * 术语：类似「请求作用域 DTO / turn state」，仅本类各 {@code stage*} 方法写入。
      */
-    private PlanPhysicalStagePolicy.PhysicalStageFlags physicalStageFlags(MainAgentTurnContext ctx) {
+    private PlanPhysicalStagePolicy.PhysicalStageFlags physicalStageFlags(WorkflowTurnState ctx) {
         PlanV1 planV1;
         try {
             planV1 = planParser.parse(ctx.planJson);
@@ -924,74 +923,6 @@ public class TravelAgent implements FinancialAnalystAgent {
             throw new IllegalStateException("plan must parse after PlanParseCoordinator", e);
         }
         return PlanPhysicalStagePolicy.resolve(planV1);
-    }
-
-    static final class MainAgentTurnContext {
-        final String conversationId;
-        final String userMessage;
-        final String requestId;
-
-        /** 主线 SSE 可观测：阶段事件（A 粒度）。在 {@link #runLinearStages} 期间顺序追加，chat() 再一次性拼进 Flux。 */
-        final List<StageEvent> stageEvents = new ArrayList<>();
-        /** 阶段耗时（毫秒），由 {@link #logStageBoundary} 写入。 */
-        final Map<StageName, Long> stageElapsedMs = new LinkedHashMap<>();
-        /** 主线 SSE 可观测：策略/决策事件（与 eval meta.policy_events 同语义）。 */
-        final List<PolicyEvent> policyEvents = new ArrayList<>();
-        /** Runtime R3 internal traces. They are not emitted to SSE or eval in R3B. */
-        final List<StageTrace> runtimeStageTraces = new ArrayList<>();
-        final List<ToolTrace> runtimeToolTraces = new ArrayList<>();
-        boolean workflowRuntimePath;
-        /**
-         * WRITE 子流：LLM {@code .timeout(llm_stream)} 或其它异常经 onErrorResume 降级为占位文本时，
-         * 在 {@link # doOnError} 写入对应 {@code error_code}，供 {@link TravelAgent#chat} 注入 {@code event:error}。
-         */
-        final AtomicReference<String> llmStreamErrorCode = new AtomicReference<>();
-
-        String currentUser;
-        Filter.Expression userFilter;
-        List<String> queries;
-        long rewriteMs;
-        List<Document> docs;
-        long retrieveMs;
-        /** 不含工具数据块的用户 prompt 片段（检索上下文 + 用户问题）。 */
-        String promptBase;
-        String toolPreface;
-        /** 送入 LLM 的最终 prompt（工具块 + promptBase）。 */
-        String finalPromptForLlm;
-        /** SSE 首包「引用片段」正文。 */
-        String citationBlock;
-
-        /** PLAN 阶段产出的 JSON 文本（含 {@code steps} 数组），并入 WRITE 前最终 prompt。 */
-        String planJson;
-
-        /** 与评测 {@code meta} 及 SSE {@code event:plan_parse} 对齐的附录 E 解析结论（由 {@link PlanService} 写回）。 */
-        String planDraftSource;
-        String planParseOutcome;
-        int planParseAttempts;
-        String planParseResolved;
-
-        /** 检索零命中且策略为 clarify 时跳过 LLM，仅下发固定澄清。 */
-        boolean skipLlmForEmptyHits;
-        String emptyHitsClarifyBody;
-        /** 与 {@link RetrieveEmptyHitGate.Decision#skipGateErrorCode()} 对齐，仅 skip LLM 时有值。 */
-        String emptyHitsGateLogCode;
-        /**
-         * 门控澄清路径下 {@link #appendTurnToMemory} 挂在 Reactor {@code doOnComplete} 上；merge/多订阅可能触发多次 complete，需保证 Redis 只追加一轮。
-         */
-        final AtomicBoolean emptyHitsMemoryWritten = new AtomicBoolean(false);
-
-        MainAgentTurnContext(String conversationId, String userMessage, String requestId) {
-            this.conversationId = conversationId;
-            this.userMessage = userMessage;
-            this.requestId = requestId;
-            this.toolPreface = "";
-            this.skipLlmForEmptyHits = false;
-            this.planJson = "";
-            this.planDraftSource = "";
-            this.planParseOutcome = "";
-            this.planParseAttempts = 0;
-            this.planParseResolved = "";
-        }
     }
 
     static String guessCityForWeather(String userMessage) {

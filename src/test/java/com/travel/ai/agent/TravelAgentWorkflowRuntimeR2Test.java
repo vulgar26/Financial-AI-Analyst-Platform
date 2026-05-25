@@ -12,6 +12,7 @@ import com.travel.ai.runtime.node.GuardStageNode;
 import com.travel.ai.runtime.node.PlanStageNode;
 import com.travel.ai.runtime.node.RetrieveStageNode;
 import com.travel.ai.runtime.node.ToolStageNode;
+import com.travel.ai.agent.state.WorkflowTurnState;
 import com.travel.ai.runtime.trace.StageTrace;
 import com.travel.ai.runtime.trace.ToolTrace;
 import com.travel.ai.tools.ToolOutcome;
@@ -96,7 +97,7 @@ class TravelAgentWorkflowRuntimeR2Test {
 
     @Test
     void runtimeFlagOn_capturesStageTracesInternally() {
-        TravelAgent.MainAgentTurnContext ctx = new TravelAgent.MainAgentTurnContext(
+        WorkflowTurnState ctx = new WorkflowTurnState(
                 "conv-stage",
                 "question",
                 "req-stage"
@@ -361,7 +362,7 @@ class TravelAgentWorkflowRuntimeR2Test {
 
     @Test
     void runtimeFlagOn_capturesMarketDataToolTraceInternally() {
-        TravelAgent.MainAgentTurnContext ctx = new TravelAgent.MainAgentTurnContext(
+        WorkflowTurnState ctx = new WorkflowTurnState(
                 "conv-tool",
                 "Explain AAPL price and P/E",
                 "req-tool"
@@ -393,7 +394,7 @@ class TravelAgentWorkflowRuntimeR2Test {
 
     @Test
     void runtimeFlagOff_doesNotCaptureRuntimeTraces() {
-        TravelAgent.MainAgentTurnContext ctx = new TravelAgent.MainAgentTurnContext(
+        WorkflowTurnState ctx = new WorkflowTurnState(
                 "conv-off",
                 "question",
                 "req-off"

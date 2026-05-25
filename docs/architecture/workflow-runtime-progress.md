@@ -255,6 +255,95 @@ This gives the project two complementary evaluation modes:
 - contract eval
 - real mainline SSE eval
 
+## TravelAgent Decomposition Progress
+
+Runtime work is now paired with incremental business-service extraction from `TravelAgent`.
+
+### Runtime Layer Completed
+
+The runtime layer currently includes:
+
+- `LinearWorkflowRuntime`
+- `WorkflowTask`
+- `WorkflowContext`
+- `WorkflowNode`
+- `NodeResult`
+- `NodeStatus`
+- `StageTrace`
+- `ToolTrace`
+
+The deterministic pre-WRITE runtime nodes have also been moved out as standalone node classes:
+
+- `PlanStageNode`
+- `RetrieveStageNode`
+- `ToolStageNode`
+- `GuardStageNode`
+
+These nodes own only runtime node semantics:
+
+- node name
+- execute / skip behavior
+- `NodeResult`
+- runtime attrs such as `run_retrieve`, `run_tool`, and `run_guard`
+
+They do not own business logic and do not emit SSE, write Redis, or generate policy events directly.
+
+### Business Service Extraction Completed
+
+The following business services have been extracted:
+
+- `PlanService`
+- `RetrieveService`
+- `ToolInvocationService`
+- `GuardDecisionService`
+- `PromptAssemblyService`
+
+Current ownership:
+
+- `PlanService` owns plan proposal, fallback plan construction, Appendix-E parse / repair / fallback resolution, and plan parse meta assembly.
+- `RetrieveService` owns query rewrite, vector search request construction, `user_id` filter application, retrieval result merge / dedupe, `promptBase`, `citationBlock`, `rewriteMs`, and `retrieveMs`.
+- `ToolInvocationService` owns tool selection, tool enabled policy, circuit breaker, rate limiter, `ToolExecutor.execute(...)`, tool preface construction, and `tool_stage` policy event construction.
+- `GuardDecisionService` owns empty-hit guard decisions, `rag_gate` policy event construction, and `finance_guard` policy event construction.
+- `PromptAssemblyService` owns final prompt assembly: profile block, tool preface, finance output guard block, plan block, and prompt base.
+
+These services are narrow by design. They return data and do not mutate `MainAgentTurnContext`.
+
+### TravelAgent Remaining Responsibilities
+
+`TravelAgent` is now closer to a mainline workflow adapter, but it still owns the request lifecycle and high-risk streaming boundary.
+
+Remaining responsibilities:
+
+- `/analysis/chat` lifecycle
+- request id / MDC lifecycle
+- total timeout handling
+- runtime feature flag split between legacy `runLinearStages(ctx)` and `runLinearStagesWithRuntime(ctx)`
+- `MainAgentTurnContext` creation and service-result writeback
+- `stageWrite(...)`
+- `ChatClient.stream()`
+- SSE stream assembly
+- heartbeat / done / error handling
+- Redis memory special write for empty-hit clarify path
+- runtime trace to stage-event bridge
+- runtime tool trace capture bridge
+- policy event aggregation into SSE
+- `plan_parse` SSE event assembly
+- `physicalStageFlags(ctx)` parsing and `PlanPhysicalStagePolicy.resolve(...)`
+
+`physicalStageFlags(ctx)` intentionally remains in `TravelAgent` for now. `PlanService` Phase Pn1 does not change `PlanStageNode` flag flow.
+
+### Explicit Non-Goals For Current Decomposition
+
+The following should not be split or rewritten in the near term:
+
+- `stageWrite(...)`
+- `ChatClient.stream()`
+- Redis memory write coordination
+- SSE event assembly
+- `/api/v1/eval/chat` / `EvalChatService`
+
+These areas have higher regression risk because they involve reactive subscriptions, memory side effects, public event shape, or deterministic eval behavior.
+
 ## Next Candidate Phases
 
 ### R5: MainSseChatAdapter
@@ -273,18 +362,50 @@ Candidate responsibilities:
 
 This should not replace `/api/v1/eval/chat`.
 
-### Move Nodes Out of TravelAgent
+### WorkflowTurnState Extraction
 
-R2 currently keeps thin node wrappers close to `TravelAgent`.
+`MainAgentTurnContext` is still an inner mutable context object in `TravelAgent`.
 
-A future phase may move nodes into dedicated classes:
+Future work may move it into a dedicated `WorkflowTurnState` model. This should be done before large adapter extraction because most remaining `TravelAgent` methods communicate through this state object.
 
-- `PlanStageNode`
-- `RetrieveStageNode`
-- `ToolStageNode`
-- `GuardStageNode`
+### MainChatWorkflowAdapter
 
-This should be done incrementally and only after tests prove behavior parity.
+Once `WorkflowTurnState` is stable, `TravelAgent` can gradually become a facade over a `MainChatWorkflowAdapter`.
+
+Candidate responsibilities:
+
+- choose legacy or runtime path
+- execute PLAN / RETRIEVE / TOOL / GUARD
+- return state ready for WRITE
+
+This must not take over `stageWrite(...)` in the first iteration.
+
+### PlanService Phase Pn2: Physical Flags
+
+`PlanService` currently stops at plan JSON and parse meta.
+
+Potential Pn2:
+
+- parse final `planJson`
+- run `PlanPhysicalStagePolicy.resolve(...)`
+- return `runRetrieve`, `runTool`, and `runGuard`
+
+This would allow `physicalStageFlags(ctx)` to move out of `TravelAgent`, but it should be tested carefully because stage flags control market-data and empty-hit behavior.
+
+### WriteStreamService
+
+`WriteStreamService` is a long-term candidate only.
+
+It would involve:
+
+- `stageWrite(...)`
+- `ChatClient.stream()`
+- LLM timeout handling
+- error fallback tokens
+- usage logging
+- stage WRITE end event timing
+
+This is not a near-term refactor because the current implementation depends on careful Reactor subscription behavior.
 
 ### Real Stage Trace Duration
 
@@ -309,3 +430,25 @@ Candidate views:
 - timeout and failure distribution
 
 This should consume trace data without changing the core workflow execution path.
+
+## Risk Boundaries
+
+Current high-risk boundaries:
+
+- SSE multi-subscription behavior
+- Redis memory duplicate writes
+- duplicate stage events
+- duplicate policy events
+- `finalPromptForLlm` format changes
+- plan physical flags changing planned stage execution
+- market data output guard disappearing from prompt assembly
+
+Refactors should continue to be small and reversible.
+
+## Rollback Principles
+
+- Each extracted business service should be independently revertible.
+- `app.agent.workflow-runtime.enabled=false` remains the main escape hatch for runtime scheduling changes.
+- Refactors in this area must not require DB migration.
+- Refactors must not require Redis key changes.
+- `/api/v1/eval/chat` remains independent from mainline `TravelAgent` execution unless a later phase explicitly introduces an adapter boundary.
