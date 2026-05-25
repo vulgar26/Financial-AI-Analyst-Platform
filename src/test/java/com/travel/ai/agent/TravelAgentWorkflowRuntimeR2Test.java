@@ -1,6 +1,7 @@
 package com.travel.ai.agent;
 
 import com.travel.ai.config.AppAgentProperties;
+import com.travel.ai.agent.workflow.MainChatWorkflowAdapter;
 import com.travel.ai.runtime.StageEvent;
 import com.travel.ai.runtime.StageEventKind;
 import com.travel.ai.runtime.StageName;
@@ -32,7 +33,7 @@ class TravelAgentWorkflowRuntimeR2Test {
         AppAgentProperties properties = new AppAgentProperties();
 
         assertThat(properties.getWorkflowRuntime().isEnabled()).isFalse();
-        assertThat(TravelAgent.shouldUseWorkflowRuntime(properties)).isFalse();
+        assertThat(MainChatWorkflowAdapter.shouldUseWorkflowRuntime(properties)).isFalse();
     }
 
     @Test
@@ -40,14 +41,14 @@ class TravelAgentWorkflowRuntimeR2Test {
         AppAgentProperties properties = new AppAgentProperties();
         properties.getWorkflowRuntime().setEnabled(true);
 
-        List<StageEvent> events = TravelAgent.toStageEventsForRuntime(List.of(
+        List<StageEvent> events = MainChatWorkflowAdapter.toStageEventsForRuntime(List.of(
                 success("PLAN"),
                 success("RETRIEVE"),
                 success("TOOL"),
                 success("GUARD")
         ), "req-1");
 
-        assertThat(TravelAgent.shouldUseWorkflowRuntime(properties)).isTrue();
+        assertThat(MainChatWorkflowAdapter.shouldUseWorkflowRuntime(properties)).isTrue();
         assertThat(events)
                 .extracting(e -> e.stage().name() + ":" + e.kind().name())
                 .containsExactly(
@@ -67,7 +68,7 @@ class TravelAgentWorkflowRuntimeR2Test {
 
     @Test
     void featureFlagOn_marketDataPolicyNotDuplicated() {
-        List<StageEvent> events = TravelAgent.toStageEventsForRuntime(List.of(
+        List<StageEvent> events = MainChatWorkflowAdapter.toStageEventsForRuntime(List.of(
                 success("TOOL"),
                 success("GUARD")
         ), "req-market");
@@ -82,7 +83,7 @@ class TravelAgentWorkflowRuntimeR2Test {
 
     @Test
     void featureFlagOn_retrieveOrToolSkipDoesNotDuplicateStageEvent() {
-        List<StageEvent> events = TravelAgent.toStageEventsForRuntime(List.of(
+        List<StageEvent> events = MainChatWorkflowAdapter.toStageEventsForRuntime(List.of(
                 skipped("RETRIEVE"),
                 skipped("TOOL")
         ), "req-skip");
@@ -109,7 +110,7 @@ class TravelAgentWorkflowRuntimeR2Test {
                 success("GUARD")
         );
 
-        TravelAgent.captureRuntimeStageTraces(ctx, traces);
+        MainChatWorkflowAdapter.captureRuntimeStageTraces(ctx, traces);
 
         assertThat(ctx.runtimeStageTraces)
                 .extracting(StageTrace::stage)

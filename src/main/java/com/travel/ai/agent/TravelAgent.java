@@ -19,6 +19,8 @@ import com.travel.ai.agent.state.WorkflowTurnState;
 import com.travel.ai.agent.tool.ToolInvocationRequest;
 import com.travel.ai.agent.tool.ToolInvocationResult;
 import com.travel.ai.agent.tool.ToolInvocationService;
+import com.travel.ai.agent.workflow.MainChatWorkflowAdapter;
+import com.travel.ai.agent.workflow.MainChatWorkflowDelegate;
 import com.travel.ai.config.AppAgentProperties;
 import com.travel.ai.profile.ProfileExtractionCoordinator;
 import com.travel.ai.profile.UserProfileService;
@@ -52,24 +54,15 @@ import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.runtime.PlanParseEvent;
 import com.travel.ai.runtime.SseControlEvent;
 import com.travel.ai.runtime.LinearWorkflowRuntime;
-import com.travel.ai.runtime.model.NodeStatus;
-import com.travel.ai.runtime.model.WorkflowContext;
-import com.travel.ai.runtime.model.WorkflowTask;
-import com.travel.ai.runtime.node.GuardStageNode;
 import com.travel.ai.runtime.node.PlanStageNode;
-import com.travel.ai.runtime.node.RetrieveStageNode;
-import com.travel.ai.runtime.node.ToolStageNode;
-import com.travel.ai.runtime.trace.StageTrace;
 import com.travel.ai.runtime.trace.ToolTrace;
 import com.travel.ai.runtime.trace.RuntimeTraceMapper;
 import com.travel.ai.tools.ToolResult;
 import com.travel.ai.web.RequestTraceFilter;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.concurrent.TimeoutException;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -77,7 +70,7 @@ import static com.travel.ai.tools.ToolObservability.log;
 
 /**
  * 金融分析 Agent 编排：主线采用<strong>固定线性阶段</strong>（P0-1 编排骨架），逻辑顺序为
- * {@code PLAN → RETRIEVE → TOOL → GUARD → WRITE}，由 {@link TravelAgent#runLinearStages(WorkflowTurnState)}
+ * {@code PLAN → RETRIEVE → TOOL → GUARD → WRITE}，由 {@link MainChatWorkflowAdapter}
  * 串行推进；禁止用「阶段名 → 处理器」的 Map 或动态跳转驱动执行（避免退化成 DAG/状态机）。
  * <p>
  * 在附录 E {@code steps[*].stage} 未声明某阶段时，<strong>物理跳过</strong>该阶段（见 {@link PlanPhysicalStagePolicy}；{@code GUARD}
@@ -103,7 +96,7 @@ public class TravelAgent implements FinancialAnalystAgent {
 
     /** SSE {@code event:error}：{@code app.agent.max-steps} 小于固定流水线阶段数。 */
     public static final String ERROR_CODE_SSE_AGENT_CONFIG = "AGENT_CONFIG_ERROR";
-    /** SSE {@code event:error}：同步编排（{@link #runLinearStages}）抛出的异常。 */
+    /** SSE {@code event:error}：同步编排（pre-WRITE workflow runner）抛出的异常。 */
     public static final String ERROR_CODE_SSE_AGENT_PIPELINE = "AGENT_PIPELINE_ERROR";
     /** SSE {@code event:error}：Reactor 流式链路中非整轮超时的异常。 */
     public static final String ERROR_CODE_SSE_AGENT_STREAM = "AGENT_STREAM_ERROR";
@@ -129,6 +122,7 @@ public class TravelAgent implements FinancialAnalystAgent {
     private final RetrieveService retrieveService;
     private final ToolInvocationService toolInvocationService;
     private final PromptAssemblyService promptAssemblyService;
+    private final MainChatWorkflowAdapter mainChatWorkflowAdapter;
 
     @Value("${app.tools.weather.enabled:true}")
     private boolean weatherToolEnabled;
@@ -195,6 +189,58 @@ public class TravelAgent implements FinancialAnalystAgent {
                 toolRateLimiter
         );
         this.promptAssemblyService = new PromptAssemblyService(userProfileService);
+        this.mainChatWorkflowAdapter = new MainChatWorkflowAdapter(
+                appAgentProperties,
+                linearWorkflowRuntime,
+                new MainChatWorkflowDelegate() {
+                    @Override
+                    public PlanStageNode.PhysicalStageFlags stagePlanAndResolvePhysicalStages(WorkflowTurnState ctx) {
+                        TravelAgent.this.stagePlan(ctx);
+                        PlanPhysicalStagePolicy.PhysicalStageFlags flags = TravelAgent.this.physicalStageFlags(ctx);
+                        return new PlanStageNode.PhysicalStageFlags(
+                                flags.runRetrieve(),
+                                flags.runTool(),
+                                flags.runGuard()
+                        );
+                    }
+
+                    @Override
+                    public void onPhysicalStageFlagsResolved(WorkflowTurnState ctx, PlanStageNode.PhysicalStageFlags flags) {
+                        log.info("[agent] physical_stages retrieve={} tool={} guard={} requestId={}",
+                                flags.runRetrieve(), flags.runTool(), flags.runGuard(), ctx.requestId);
+                    }
+
+                    @Override
+                    public void stageRetrieve(WorkflowTurnState ctx) {
+                        TravelAgent.this.stageRetrieve(ctx);
+                    }
+
+                    @Override
+                    public void onRetrieveSkippedByPlan(WorkflowTurnState ctx) {
+                        TravelAgent.this.applyRetrieveSkippedState(ctx);
+                    }
+
+                    @Override
+                    public void stageTool(WorkflowTurnState ctx) {
+                        TravelAgent.this.stageTool(ctx);
+                    }
+
+                    @Override
+                    public void onToolSkippedByPlan(WorkflowTurnState ctx) {
+                        TravelAgent.this.applyToolSkippedState(ctx);
+                    }
+
+                    @Override
+                    public void stageGuard(WorkflowTurnState ctx) {
+                        TravelAgent.this.stageGuard(ctx);
+                    }
+
+                    @Override
+                    public void onGuardSkippedByPlan(WorkflowTurnState ctx) {
+                        log.info("[stage] GUARD skipped_by_plan requestId={}", ctx.requestId);
+                    }
+                }
+        );
         this.chatClient = builder
                 .defaultSystem(SYSTEM_PROMPT)
                 .defaultAdvisors(
@@ -251,11 +297,7 @@ public class TravelAgent implements FinancialAnalystAgent {
 
         WorkflowTurnState ctx = new WorkflowTurnState(conversationId, userMessage, requestId);
         try {
-            if (shouldUseWorkflowRuntime(appAgentProperties)) {
-                runLinearStagesWithRuntime(ctx);
-            } else {
-                runLinearStages(ctx);
-            }
+            mainChatWorkflowAdapter.runPreWriteWorkflow(ctx);
         } catch (Exception e) {
             log.error("[agent] pipeline_failed requestId={} err={}", requestId, e.toString());
             Flux<ServerSentEvent<String>> err = Flux.just(ServerSentEvent.<String>builder()
@@ -407,129 +449,6 @@ public class TravelAgent implements FinancialAnalystAgent {
      * P0-1：在固定顺序下串行推进各阶段；是否<strong>真正执行</strong> RETRIEVE/TOOL/GUARD 由解析后的 plan {@code steps} 决定
      * （{@link PlanPhysicalStagePolicy}）。
      */
-    private void runLinearStages(WorkflowTurnState ctx) {
-        ctx.stageEvents.add(StageEvent.start(StageName.PLAN, ctx.requestId));
-        stagePlan(ctx);
-        // stagePlan 内部会记录 plan_parse_* 元数据；阶段结束事件在此统一写入
-        ctx.stageEvents.add(StageEvent.end(StageName.PLAN, ctx.requestId, ctx.stageElapsedMs.getOrDefault(StageName.PLAN, 0L)));
-        PlanV1 planV1;
-        try {
-            planV1 = planParser.parse(ctx.planJson);
-        } catch (PlanParseException e) {
-            throw new IllegalStateException("plan must parse after PlanParseCoordinator", e);
-        }
-        PlanPhysicalStagePolicy.PhysicalStageFlags f = PlanPhysicalStagePolicy.resolve(planV1);
-        log.info("[agent] physical_stages retrieve={} tool={} guard={} requestId={}",
-                f.runRetrieve(), f.runTool(), f.runGuard(), ctx.requestId);
-
-        if (f.runRetrieve()) {
-            ctx.stageEvents.add(StageEvent.start(StageName.RETRIEVE, ctx.requestId));
-            stageRetrieve(ctx);
-            ctx.stageEvents.add(StageEvent.end(StageName.RETRIEVE, ctx.requestId, ctx.stageElapsedMs.getOrDefault(StageName.RETRIEVE, 0L)));
-        } else {
-            applyRetrieveSkipped(ctx);
-        }
-        if (f.runTool()) {
-            ctx.stageEvents.add(StageEvent.start(StageName.TOOL, ctx.requestId));
-            stageTool(ctx);
-            ctx.stageEvents.add(StageEvent.end(StageName.TOOL, ctx.requestId, ctx.stageElapsedMs.getOrDefault(StageName.TOOL, 0L)));
-        } else {
-            applyToolSkipped(ctx);
-        }
-        if (f.runGuard()) {
-            ctx.stageEvents.add(StageEvent.start(StageName.GUARD, ctx.requestId));
-            stageGuard(ctx);
-            ctx.stageEvents.add(StageEvent.end(StageName.GUARD, ctx.requestId, ctx.stageElapsedMs.getOrDefault(StageName.GUARD, 0L)));
-        } else {
-            log.info("[stage] GUARD skipped_by_plan requestId={}", ctx.requestId);
-            ctx.stageEvents.add(StageEvent.skip(StageName.GUARD, ctx.requestId, "skipped_by_plan"));
-        }
-    }
-
-    private void runLinearStagesWithRuntime(WorkflowTurnState ctx) {
-        ctx.workflowRuntimePath = true;
-        WorkflowTask task = WorkflowTask.of(
-                "finance_analyst_chat",
-                "v1",
-                "finance",
-                ctx.requestId,
-                ctx.conversationId,
-                ctx.userMessage
-        );
-        WorkflowContext runtimeCtx = linearWorkflowRuntime.run(task, List.of(
-                new PlanStageNode(new PlanStageNode.PlanStageDelegate() {
-                    @Override
-                    public PlanStageNode.PhysicalStageFlags stagePlanAndResolvePhysicalStages() {
-                        TravelAgent.this.stagePlan(ctx);
-                        PlanPhysicalStagePolicy.PhysicalStageFlags flags = TravelAgent.this.physicalStageFlags(ctx);
-                        return new PlanStageNode.PhysicalStageFlags(
-                                flags.runRetrieve(),
-                                flags.runTool(),
-                                flags.runGuard()
-                        );
-                    }
-
-                    @Override
-                    public void onPhysicalStageFlagsResolved(PlanStageNode.PhysicalStageFlags flags) {
-                        log.info("[agent] physical_stages retrieve={} tool={} guard={} requestId={}",
-                                flags.runRetrieve(), flags.runTool(), flags.runGuard(), ctx.requestId);
-                    }
-                }),
-                new RetrieveStageNode(new RetrieveStageNode.RetrieveStageDelegate() {
-                    @Override
-                    public void stageRetrieve() {
-                        TravelAgent.this.stageRetrieve(ctx);
-                    }
-
-                    @Override
-                    public void onRetrieveSkippedByPlan() {
-                        TravelAgent.this.applyRetrieveSkippedState(ctx);
-                    }
-                }),
-                new ToolStageNode(new ToolStageNode.ToolStageDelegate() {
-                    @Override
-                    public void stageTool() {
-                        TravelAgent.this.stageTool(ctx);
-                    }
-
-                    @Override
-                    public void onToolSkippedByPlan() {
-                        TravelAgent.this.applyToolSkippedState(ctx);
-                    }
-                }),
-                new GuardStageNode(new GuardStageNode.GuardStageDelegate() {
-                    @Override
-                    public void stageGuard() {
-                        TravelAgent.this.stageGuard(ctx);
-                    }
-
-                    @Override
-                    public void onGuardSkippedByPlan() {
-                        log.info("[stage] GUARD skipped_by_plan requestId={}", ctx.requestId);
-                    }
-                })
-        ));
-        captureRuntimeStageTraces(ctx, runtimeCtx.getStageTraces());
-        ctx.stageEvents.addAll(toStageEventsForRuntime(runtimeCtx.getStageTraces(), ctx.requestId));
-        StageTrace failed = firstFailedTrace(runtimeCtx.getStageTraces());
-        if (failed != null) {
-            throw new IllegalStateException("workflow runtime node failed: " + failed.stage()
-                    + (failed.message() != null && !failed.message().isBlank() ? " - " + failed.message() : ""));
-        }
-    }
-
-    static boolean shouldUseWorkflowRuntime(AppAgentProperties properties) {
-        return properties != null && properties.getWorkflowRuntime().isEnabled();
-    }
-
-    static void captureRuntimeStageTraces(WorkflowTurnState ctx, List<StageTrace> traces) {
-        if (ctx == null || traces == null || traces.isEmpty()) {
-            return;
-        }
-        ctx.runtimeStageTraces.clear();
-        ctx.runtimeStageTraces.addAll(traces);
-    }
-
     static void captureRuntimeToolTrace(WorkflowTurnState ctx, ToolResult result) {
         if (ctx == null || !ctx.workflowRuntimePath || result == null) {
             return;
@@ -538,76 +457,6 @@ public class TravelAgent implements FinancialAnalystAgent {
         if (trace != null) {
             ctx.runtimeToolTraces.add(trace);
         }
-    }
-
-    static List<StageEvent> toStageEventsForRuntime(List<StageTrace> traces, String requestId) {
-        if (traces == null || traces.isEmpty()) {
-            return List.of();
-        }
-        List<StageEvent> events = new ArrayList<>();
-        for (StageTrace trace : traces) {
-            StageName stage = parseStageName(trace.stage());
-            if (stage == null) {
-                continue;
-            }
-            NodeStatus status = trace.status();
-            if (status == NodeStatus.SKIPPED) {
-                events.add(StageEvent.skip(stage, requestId, skipReason(trace)));
-            } else if (status == NodeStatus.SUCCESS) {
-                events.add(StageEvent.start(stage, requestId));
-                events.add(StageEvent.end(stage, requestId, trace.elapsedMs() != null ? trace.elapsedMs() : 0L));
-            } else {
-                events.add(StageEvent.start(stage, requestId));
-                events.add(new StageEvent(
-                        com.travel.ai.runtime.StageEventKind.ERROR,
-                        stage,
-                        requestId,
-                        trace.elapsedMs(),
-                        trace.errorCode(),
-                        trace.message(),
-                        trace.attrs() != null ? trace.attrs() : Map.of()
-                ));
-            }
-        }
-        return events;
-    }
-
-    private static StageTrace firstFailedTrace(List<StageTrace> traces) {
-        if (traces == null) {
-            return null;
-        }
-        for (StageTrace trace : traces) {
-            if (trace != null && (trace.status() == NodeStatus.FAILED || trace.status() == NodeStatus.TIMEOUT)) {
-                return trace;
-            }
-        }
-        return null;
-    }
-
-    private static StageName parseStageName(String stage) {
-        if (stage == null || stage.isBlank()) {
-            return null;
-        }
-        try {
-            return StageName.valueOf(stage);
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
-    }
-
-    private static String skipReason(StageTrace trace) {
-        if (trace != null && trace.attrs() != null) {
-            String reason = trace.attrs().get("reason");
-            if (reason != null && !reason.isBlank()) {
-                return reason;
-            }
-        }
-        return "skipped_by_plan";
-    }
-
-    private void applyRetrieveSkipped(WorkflowTurnState ctx) {
-        applyRetrieveSkippedState(ctx);
-        ctx.stageEvents.add(StageEvent.skip(StageName.RETRIEVE, ctx.requestId, "skipped_by_plan"));
     }
 
     private void applyRetrieveSkippedState(WorkflowTurnState ctx) {
@@ -633,11 +482,6 @@ public class TravelAgent implements FinancialAnalystAgent {
         log.info("[perf] rewrite_ms={} retrieve_ms={} doc_count={} requestId={}",
                 ctx.rewriteMs, ctx.retrieveMs, ctx.docs.size(), ctx.requestId);
         logStageBoundary(StageName.RETRIEVE, t0, ctx);
-    }
-
-    private void applyToolSkipped(WorkflowTurnState ctx) {
-        applyToolSkippedState(ctx);
-        ctx.stageEvents.add(StageEvent.skip(StageName.TOOL, ctx.requestId, "skipped_by_plan"));
     }
 
     private void applyToolSkippedState(WorkflowTurnState ctx) {
