@@ -1,27 +1,45 @@
 package com.travel.ai.agent.workflow;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.travel.ai.agent.MarketDataTool;
+import com.travel.ai.agent.QueryRewriter;
+import com.travel.ai.agent.guard.GuardDecisionService;
+import com.travel.ai.agent.plan.MainLinePlanProposer;
+import com.travel.ai.agent.plan.PlanService;
+import com.travel.ai.agent.prompt.PromptAssemblyService;
+import com.travel.ai.agent.retrieve.RetrieveService;
 import com.travel.ai.agent.state.WorkflowTurnState;
+import com.travel.ai.agent.tool.ToolInvocationService;
 import com.travel.ai.config.AppAgentProperties;
+import com.travel.ai.plan.PlanParseCoordinator;
+import com.travel.ai.plan.PlanParser;
 import com.travel.ai.runtime.LinearWorkflowRuntime;
-import com.travel.ai.runtime.StageEvent;
+import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.runtime.StageEventKind;
 import com.travel.ai.runtime.StageName;
-import com.travel.ai.runtime.node.PlanStageNode;
 import com.travel.ai.runtime.trace.StageTrace;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.VectorStore;
 
-import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class MainChatWorkflowAdapterTest {
 
     @Test
     void flagOff_runsLegacyStagesInSameOrder() {
-        WorkflowTurnState ctx = state();
-        MainChatWorkflowAdapter adapter = adapter(false, new RecordingDelegate(true, true, true));
+        WorkflowTurnState ctx = state("price AAPL");
+        MainChatWorkflowAdapter adapter = adapter(false, planJson(true, true, true), realPlanParser());
 
         adapter.runPreWriteWorkflow(ctx);
 
@@ -39,12 +57,13 @@ class MainChatWorkflowAdapterTest {
                 );
         assertThat(ctx.workflowRuntimePath).isFalse();
         assertThat(ctx.runtimeStageTraces).isEmpty();
+        assertThat(ctx.finalPromptForLlm).contains("BEGIN_TOOL_DATA", "research hit", "\"stage\":\"RETRIEVE\"");
     }
 
     @Test
     void flagOn_runsRuntimeStagesInSameOrder() {
-        WorkflowTurnState ctx = state();
-        MainChatWorkflowAdapter adapter = adapter(true, new RecordingDelegate(true, true, true));
+        WorkflowTurnState ctx = state("price AAPL");
+        MainChatWorkflowAdapter adapter = adapter(true, planJson(true, true, true), realPlanParser());
 
         adapter.runPreWriteWorkflow(ctx);
 
@@ -65,8 +84,8 @@ class MainChatWorkflowAdapterTest {
 
     @Test
     void flagOn_capturesRuntimeStageTraces() {
-        WorkflowTurnState ctx = state();
-        MainChatWorkflowAdapter adapter = adapter(true, new RecordingDelegate(true, false, true));
+        WorkflowTurnState ctx = state("price AAPL");
+        MainChatWorkflowAdapter adapter = adapter(true, planJson(true, false, true), realPlanParser());
 
         adapter.runPreWriteWorkflow(ctx);
 
@@ -77,24 +96,28 @@ class MainChatWorkflowAdapterTest {
 
     @Test
     void flagOn_convertsFailedTraceToException() {
-        WorkflowTurnState ctx = state();
-        RecordingDelegate delegate = new RecordingDelegate(true, true, true);
-        delegate.failTool = true;
-        MainChatWorkflowAdapter adapter = adapter(true, delegate);
+        WorkflowTurnState ctx = state("price AAPL");
+        PlanParser failingPhysicalPolicyParser = new PlanParser(new ObjectMapper()) {
+            @Override
+            public com.travel.ai.plan.PlanV1 parse(String raw) throws com.travel.ai.plan.PlanParseException {
+                throw new com.travel.ai.plan.PlanParseException("boom");
+            }
+        };
+        MainChatWorkflowAdapter adapter = adapter(true, planJson(true, true, true), failingPhysicalPolicyParser);
 
         assertThatThrownBy(() -> adapter.runPreWriteWorkflow(ctx))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("workflow runtime node failed: TOOL");
+                .hasMessageContaining("workflow runtime node failed: PLAN");
 
         assertThat(ctx.runtimeStageTraces)
                 .extracting(StageTrace::stage)
-                .contains("TOOL");
+                .contains("PLAN");
     }
 
     @Test
-    void flagOn_doesNotDuplicateStageEvents() {
-        WorkflowTurnState ctx = state();
-        MainChatWorkflowAdapter adapter = adapter(true, new RecordingDelegate(false, false, false));
+    void flagOn_doesNotDuplicateStageEventsForSkippedStages() {
+        WorkflowTurnState ctx = state("plain answer");
+        MainChatWorkflowAdapter adapter = adapter(true, planJson(false, false, false), realPlanParser());
 
         adapter.runPreWriteWorkflow(ctx);
 
@@ -110,77 +133,143 @@ class MainChatWorkflowAdapterTest {
                 .containsOnly("skipped_by_plan");
     }
 
-    private static MainChatWorkflowAdapter adapter(boolean runtimeEnabled, RecordingDelegate delegate) {
+    @Test
+    void flagOn_capturesRuntimeToolTraceOnce() {
+        WorkflowTurnState ctx = state("price AAPL");
+        MainChatWorkflowAdapter adapter = adapter(true, planJson(true, true, true), realPlanParser());
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        assertThat(ctx.runtimeToolTraces).hasSize(1);
+        assertThat(ctx.runtimeToolTraces.get(0).toolName()).isEqualTo("market_data");
+    }
+
+    @Test
+    void flagOn_doesNotCaptureRuntimeToolTraceWhenToolSkipped() {
+        WorkflowTurnState ctx = state("price AAPL");
+        MainChatWorkflowAdapter adapter = adapter(true, planJson(true, false, true), realPlanParser());
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        assertThat(ctx.runtimeToolTraces).isEmpty();
+        assertThat(ctx.finalPromptForLlm).doesNotContain("BEGIN_TOOL_DATA");
+    }
+
+    @Test
+    void flagOn_doesNotDuplicatePolicyEvents() {
+        WorkflowTurnState ctx = state("price AAPL");
+        MainChatWorkflowAdapter adapter = adapter(true, planJson(true, true, true), realPlanParser());
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        Set<String> unique = new LinkedHashSet<>();
+        for (PolicyEvent e : ctx.policyEvents) {
+            unique.add(e.policyType() + "|" + e.stage() + "|" + e.ruleId());
+        }
+        assertThat(ctx.policyEvents).hasSize(unique.size());
+        assertThat(ctx.policyEvents)
+                .extracting(PolicyEvent::policyType)
+                .contains("tool_stage", "rag_gate", "finance_guard");
+    }
+
+    @Test
+    void flagOff_buildsStableNonBlankFinalPromptWhenToolSkipped() {
+        WorkflowTurnState ctx = state("plain answer");
+        MainChatWorkflowAdapter adapter = adapter(false, planJson(true, false, true), realPlanParser());
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        assertThat(ctx.finalPromptForLlm).isNotBlank();
+        assertThat(ctx.finalPromptForLlm).contains(
+                "research hit",
+                "\"plan_version\":\"v1\"",
+                "\"stage\":\"RETRIEVE\""
+        );
+        assertThat(ctx.finalPromptForLlm).doesNotContain("BEGIN_TOOL_DATA");
+    }
+
+    private static MainChatWorkflowAdapter adapter(boolean runtimeEnabled, String planJson, PlanParser policyParser) {
         AppAgentProperties properties = new AppAgentProperties();
         properties.getWorkflowRuntime().setEnabled(runtimeEnabled);
-        return new MainChatWorkflowAdapter(properties, new LinearWorkflowRuntime(), delegate);
+
+        PlanParser serviceParser = realPlanParser();
+        MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
+        when(proposer.proposePlanJson(any(), any())).thenReturn(planJson);
+        PlanService planService = new PlanService(
+                proposer,
+                new PlanParseCoordinator(serviceParser, hint -> planJson)
+        );
+
+        QueryRewriter queryRewriter = mock(QueryRewriter.class);
+        when(queryRewriter.rewrite(any())).thenReturn(List.of("query-1"));
+        VectorStore vectorStore = mock(VectorStore.class);
+        when(vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(new Document("doc-1", "research hit", Map.of("source_name", "unit"))));
+        RetrieveService retrieveService = new RetrieveService(queryRewriter, vectorStore);
+
+        ToolInvocationService toolInvocationService = new ToolInvocationService(
+                null,
+                new MarketDataTool(),
+                null,
+                null
+        );
+
+        return new MainChatWorkflowAdapter(
+                properties,
+                new LinearWorkflowRuntime(),
+                planService,
+                retrieveService,
+                toolInvocationService,
+                new GuardDecisionService(),
+                new PromptAssemblyService(null),
+                policyParser,
+                () -> true,
+                () -> true,
+                () -> 400,
+                () -> 600,
+                () -> "clarify",
+                5,
+                2
+        );
     }
 
-    private static WorkflowTurnState state() {
-        return new WorkflowTurnState("conv-1", "question", "req-1");
+    private static PlanParser realPlanParser() {
+        return new PlanParser(new ObjectMapper());
     }
 
-    private static final class RecordingDelegate implements MainChatWorkflowDelegate {
-        private final boolean runRetrieve;
-        private final boolean runTool;
-        private final boolean runGuard;
-        private boolean failTool;
-        private final List<String> calls = new ArrayList<>();
+    private static WorkflowTurnState state(String userMessage) {
+        return new WorkflowTurnState("conv-1", userMessage, "req-1");
+    }
 
-        private RecordingDelegate(boolean runRetrieve, boolean runTool, boolean runGuard) {
-            this.runRetrieve = runRetrieve;
-            this.runTool = runTool;
-            this.runGuard = runGuard;
+    private static String planJson(boolean retrieve, boolean tool, boolean guard) {
+        StringBuilder steps = new StringBuilder();
+        int idx = 1;
+        if (retrieve) {
+            appendStep(steps, idx++, "RETRIEVE");
         }
+        if (tool) {
+            appendStep(steps, idx++, "TOOL");
+        }
+        if (guard) {
+            appendStep(steps, idx++, "GUARD");
+        }
+        appendStep(steps, idx, "WRITE");
+        return "{\"plan_version\":\"v1\",\"goal\":\"unit\","
+                + "\"steps\":[" + steps + "],"
+                + "\"constraints\":{\"max_steps\":8,\"total_timeout_ms\":60000,\"tool_timeout_ms\":3000},"
+                + "\"notes\":\"unit\"}";
+    }
 
-        @Override
-        public PlanStageNode.PhysicalStageFlags stagePlanAndResolvePhysicalStages(WorkflowTurnState ctx) {
-            calls.add("PLAN");
-            ctx.stageElapsedMs.put(StageName.PLAN, 1L);
-            return new PlanStageNode.PhysicalStageFlags(runRetrieve, runTool, runGuard);
+    private static void appendStep(StringBuilder steps, int idx, String stage) {
+        if (steps.length() > 0) {
+            steps.append(',');
         }
-
-        @Override
-        public void onPhysicalStageFlagsResolved(WorkflowTurnState ctx, PlanStageNode.PhysicalStageFlags flags) {
-            calls.add("FLAGS");
-        }
-
-        @Override
-        public void stageRetrieve(WorkflowTurnState ctx) {
-            calls.add("RETRIEVE");
-            ctx.stageElapsedMs.put(StageName.RETRIEVE, 2L);
-        }
-
-        @Override
-        public void onRetrieveSkippedByPlan(WorkflowTurnState ctx) {
-            calls.add("RETRIEVE_SKIP");
-            ctx.stageElapsedMs.put(StageName.RETRIEVE, 0L);
-        }
-
-        @Override
-        public void stageTool(WorkflowTurnState ctx) {
-            calls.add("TOOL");
-            if (failTool) {
-                throw new IllegalStateException("tool failed");
-            }
-            ctx.stageElapsedMs.put(StageName.TOOL, 3L);
-        }
-
-        @Override
-        public void onToolSkippedByPlan(WorkflowTurnState ctx) {
-            calls.add("TOOL_SKIP");
-            ctx.stageElapsedMs.put(StageName.TOOL, 0L);
-        }
-
-        @Override
-        public void stageGuard(WorkflowTurnState ctx) {
-            calls.add("GUARD");
-            ctx.stageElapsedMs.put(StageName.GUARD, 4L);
-        }
-
-        @Override
-        public void onGuardSkippedByPlan(WorkflowTurnState ctx) {
-            calls.add("GUARD_SKIP");
-        }
+        steps.append("{\"step_id\":\"s")
+                .append(idx)
+                .append("\",\"stage\":\"")
+                .append(stage)
+                .append("\",\"instruction\":\"run ")
+                .append(stage.toLowerCase())
+                .append("\"}");
     }
 }
