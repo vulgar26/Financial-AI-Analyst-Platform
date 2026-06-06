@@ -20,7 +20,6 @@ import com.travel.ai.agent.tool.ToolInvocationRequest;
 import com.travel.ai.agent.tool.ToolInvocationResult;
 import com.travel.ai.agent.tool.ToolInvocationService;
 import com.travel.ai.agent.workflow.MainChatWorkflowAdapter;
-import com.travel.ai.agent.workflow.MainChatWorkflowDelegate;
 import com.travel.ai.config.AppAgentProperties;
 import com.travel.ai.profile.ProfileExtractionCoordinator;
 import com.travel.ai.profile.UserProfileService;
@@ -192,54 +191,19 @@ public class TravelAgent implements FinancialAnalystAgent {
         this.mainChatWorkflowAdapter = new MainChatWorkflowAdapter(
                 appAgentProperties,
                 linearWorkflowRuntime,
-                new MainChatWorkflowDelegate() {
-                    @Override
-                    public PlanStageNode.PhysicalStageFlags stagePlanAndResolvePhysicalStages(WorkflowTurnState ctx) {
-                        TravelAgent.this.stagePlan(ctx);
-                        PlanPhysicalStagePolicy.PhysicalStageFlags flags = TravelAgent.this.physicalStageFlags(ctx);
-                        return new PlanStageNode.PhysicalStageFlags(
-                                flags.runRetrieve(),
-                                flags.runTool(),
-                                flags.runGuard()
-                        );
-                    }
-
-                    @Override
-                    public void onPhysicalStageFlagsResolved(WorkflowTurnState ctx, PlanStageNode.PhysicalStageFlags flags) {
-                        log.info("[agent] physical_stages retrieve={} tool={} guard={} requestId={}",
-                                flags.runRetrieve(), flags.runTool(), flags.runGuard(), ctx.requestId);
-                    }
-
-                    @Override
-                    public void stageRetrieve(WorkflowTurnState ctx) {
-                        TravelAgent.this.stageRetrieve(ctx);
-                    }
-
-                    @Override
-                    public void onRetrieveSkippedByPlan(WorkflowTurnState ctx) {
-                        TravelAgent.this.applyRetrieveSkippedState(ctx);
-                    }
-
-                    @Override
-                    public void stageTool(WorkflowTurnState ctx) {
-                        TravelAgent.this.stageTool(ctx);
-                    }
-
-                    @Override
-                    public void onToolSkippedByPlan(WorkflowTurnState ctx) {
-                        TravelAgent.this.applyToolSkippedState(ctx);
-                    }
-
-                    @Override
-                    public void stageGuard(WorkflowTurnState ctx) {
-                        TravelAgent.this.stageGuard(ctx);
-                    }
-
-                    @Override
-                    public void onGuardSkippedByPlan(WorkflowTurnState ctx) {
-                        log.info("[stage] GUARD skipped_by_plan requestId={}", ctx.requestId);
-                    }
-                }
+                planService,
+                retrieveService,
+                toolInvocationService,
+                guardDecisionService,
+                promptAssemblyService,
+                planParser,
+                () -> weatherToolEnabled,
+                () -> marketDataToolEnabled,
+                () -> weatherSummaryMaxChars,
+                () -> marketDataSummaryMaxChars,
+                () -> emptyHitsBehavior,
+                MAX_CONTEXT_DOCS,
+                2
         );
         this.chatClient = builder
                 .defaultSystem(SYSTEM_PROMPT)
@@ -445,63 +409,6 @@ public class TravelAgent implements FinancialAnalystAgent {
         return false;
     }
 
-    /**
-     * P0-1：在固定顺序下串行推进各阶段；是否<strong>真正执行</strong> RETRIEVE/TOOL/GUARD 由解析后的 plan {@code steps} 决定
-     * （{@link PlanPhysicalStagePolicy}）。
-     */
-    static void captureRuntimeToolTrace(WorkflowTurnState ctx, ToolResult result) {
-        if (ctx == null || !ctx.workflowRuntimePath || result == null) {
-            return;
-        }
-        ToolTrace trace = RuntimeTraceMapper.toToolTrace(result);
-        if (trace != null) {
-            ctx.runtimeToolTraces.add(trace);
-        }
-    }
-
-    private void applyRetrieveSkippedState(WorkflowTurnState ctx) {
-        long t0 = System.nanoTime();
-        log.info("[stage] RETRIEVE skipped_by_plan requestId={}", ctx.requestId);
-        ctx.queries = List.of();
-        ctx.rewriteMs = 0;
-        ctx.currentUser = org.springframework.security.core.context.SecurityContextHolder
-                .getContext()
-                .getAuthentication() != null
-                ? org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getName()
-                : "anonymous";
-        ctx.userFilter = new Filter.Expression(
-                Filter.ExpressionType.EQ,
-                new Filter.Key("user_id"),
-                new Filter.Value(ctx.currentUser)
-        );
-        ctx.docs = List.of();
-        ctx.retrieveMs = 0;
-        ctx.promptBase = ctx.userMessage != null ? ctx.userMessage : "";
-        ctx.citationBlock = "【引用片段】\n（本轮未命中知识库）\n\n";
-        log.info("检索到 {} 条知识，queries={}", ctx.docs.size(), ctx.queries);
-        log.info("[perf] rewrite_ms={} retrieve_ms={} doc_count={} requestId={}",
-                ctx.rewriteMs, ctx.retrieveMs, ctx.docs.size(), ctx.requestId);
-        logStageBoundary(StageName.RETRIEVE, t0, ctx);
-    }
-
-    private void applyToolSkippedState(WorkflowTurnState ctx) {
-        long t0 = System.nanoTime();
-        log.info("[stage] TOOL skipped_by_plan requestId={}", ctx.requestId);
-        ctx.toolPreface = "";
-        mergeFinalPromptFromCtx(ctx);
-        logStageBoundary(StageName.TOOL, t0, ctx);
-    }
-
-    private void mergeFinalPromptFromCtx(WorkflowTurnState ctx) {
-        PromptAssemblyResult result = promptAssemblyService.assemble(new PromptAssemblyRequest(
-                ctx.currentUser,
-                ctx.toolPreface,
-                ctx.planJson,
-                ctx.promptBase
-        ));
-        ctx.finalPromptForLlm = result.finalPromptForLlm();
-    }
-
     private void logStageBoundary(StageName stage, long startNs, WorkflowTurnState ctx) {
         long ms = (System.nanoTime() - startNs) / 1_000_000L;
         String requestId = ctx != null ? ctx.requestId : "";
@@ -511,31 +418,6 @@ public class TravelAgent implements FinancialAnalystAgent {
         }
     }
 
-    /**
-     * PLAN：调用 {@link MainLinePlanProposer} 产出结构化 Plan JSON（与后续 RETRIEVE/TOOL 并行写入 prompt）；
-     * {@code app.agent.plan-stage.enabled=false} 或模型失败时使用本地降级 JSON；最后经 {@link PlanParseCoordinator}
-     * 做附录 E 校验与至多一次 repair（与评测路径一致），仍失败则再降级为内置合法 JSON。
-     */
-    private void stagePlan(WorkflowTurnState ctx) {
-        long t0 = System.nanoTime();
-        log.info("[stage] PLAN start requestId={}", ctx.requestId);
-        PlanServiceResult result = planService.plan(new PlanServiceRequest(
-                ctx.userMessage,
-                ctx.requestId,
-                appAgentProperties.getPlanStage().isEnabled()
-        ));
-        ctx.planJson = result.planJson();
-        ctx.planDraftSource = result.planDraftSource();
-        ctx.planParseOutcome = result.planParseOutcome();
-        ctx.planParseAttempts = result.planParseAttempts();
-        ctx.planParseResolved = result.planParseResolved();
-        logStageBoundary(StageName.PLAN, t0, ctx);
-    }
-
-    /**
-     * 与评测 {@code meta.plan_parse_outcome} / {@code meta.plan_parse_attempts} 同名字段，另含 {@code plan_draft_source}、
-     * {@code plan_parse_resolved}（与日志 {@code [plan]} {@code resolved=} 对齐），便于 harness 对账。
-     */
     private static ServerSentEvent<String> buildPlanParseMetaEvent(WorkflowTurnState ctx) {
         PlanParseEvent e = PlanParseEvent.of(
                 ctx.planParseOutcome,
@@ -550,104 +432,6 @@ public class TravelAgent implements FinancialAnalystAgent {
                 .build();
     }
 
-    /**
-     * RETRIEVE：查询改写 + 向量检索 + 去重截断 + 拼出不带工具前缀的 {@code promptBase}，并生成 SSE 用 {@code citationBlock}。
-     */
-    private void stageRetrieve(WorkflowTurnState ctx) {
-        long t0 = System.nanoTime();
-        log.info("[stage] RETRIEVE start requestId={}", ctx.requestId);
-
-        ctx.currentUser = org.springframework.security.core.context.SecurityContextHolder
-                .getContext()
-                .getAuthentication() != null
-                ? org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getName()
-                : "anonymous";
-        RetrieveResult result = retrieveService.retrieve(new RetrieveRequest(
-                ctx.userMessage,
-                ctx.currentUser,
-                ctx.requestId,
-                MAX_CONTEXT_DOCS,
-                2
-        ));
-        ctx.currentUser = result.currentUser();
-        ctx.userFilter = new Filter.Expression(
-                Filter.ExpressionType.EQ,
-                new Filter.Key("user_id"),
-                new Filter.Value(ctx.currentUser)
-        );
-        ctx.queries = result.queries();
-        ctx.docs = result.docs();
-        ctx.promptBase = result.promptBase();
-        ctx.citationBlock = result.citationBlock();
-        ctx.rewriteMs = result.rewriteMs();
-        ctx.retrieveMs = result.retrieveMs();
-
-        logStageBoundary(StageName.RETRIEVE, t0, ctx);
-    }
-
-    /**
-     * TOOL：系统受控工具；产出 {@code toolPreface}，与 PLAN 的 {@code planJson} 及 {@code promptBase} 合并为 {@code finalPromptForLlm}。
-     */
-    private void stageTool(WorkflowTurnState ctx) {
-        long t0 = System.nanoTime();
-        log.info("[stage] TOOL start requestId={}", ctx.requestId);
-
-        ToolInvocationResult invocation = toolInvocationService.invoke(new ToolInvocationRequest(
-                ctx.userMessage,
-                ctx.requestId,
-                weatherToolEnabled,
-                marketDataToolEnabled,
-                weatherSummaryMaxChars,
-                marketDataSummaryMaxChars
-        ));
-        ctx.toolPreface = invocation.toolPreface();
-        if (invocation.toolResult() != null) {
-            log(log, invocation.toolResult(), ctx.requestId);
-            captureRuntimeToolTrace(ctx, invocation.toolResult());
-        }
-        ctx.policyEvents.addAll(invocation.policyEvents());
-
-        mergeFinalPromptFromCtx(ctx);
-
-        logStageBoundary(StageName.TOOL, t0, ctx);
-    }
-
-    /**
-     * GUARD：检索零命中门控（P0 默认 clarify）；仅当 TOOL 的 {@code BEGIN_TOOL_DATA} 与 {@code END_TOOL_DATA} 之间有<strong>非空</strong>正文时放行 LLM，
-     * 避免「工具 outcome=ERROR 且 payload 空」仍走大模型编造实时数据。
-     */
-    private void stageGuard(WorkflowTurnState ctx) {
-        long t0 = System.nanoTime();
-        log.info("[stage] GUARD start requestId={}", ctx.requestId);
-
-        GuardDecisionResult decision = guardDecisionService.decide(new GuardDecisionRequest(
-                ctx.docs,
-                ctx.toolPreface,
-                emptyHitsBehavior,
-                ctx.requestId
-        ));
-        ctx.skipLlmForEmptyHits = decision.skipLlm();
-        ctx.emptyHitsClarifyBody = decision.clarifyBody() != null ? decision.clarifyBody() : "";
-        ctx.emptyHitsGateLogCode = decision.emptyHitsGateLogCode();
-        ctx.policyEvents.addAll(decision.policyEvents());
-        switch (decision.reason()) {
-            case APPLIED_CLARIFY_RAG_EMPTY, APPLIED_CLARIFY_TOOL_NO_PAYLOAD -> log.info(
-                    "[guard] empty_hits gate=clarify error_code={} requestId={}",
-                    decision.emptyHitsGateLogCode(), ctx.requestId);
-            case SKIPPED_TOOL_SUBSTANTIVE_PAYLOAD -> log.info(
-                    "[guard] empty_hits skipped gate tool_data_present requestId={}", ctx.requestId);
-            case SKIPPED_HAS_RETRIEVAL_HITS -> log.debug("[guard] retrieve_hits>0 requestId={}", ctx.requestId);
-            case SKIPPED_NOT_CLARIFY_MODE -> log.info(
-                    "[guard] empty_hits_behavior={} no_clarify_gate requestId={}", emptyHitsBehavior, ctx.requestId);
-        }
-
-        logStageBoundary(StageName.GUARD, t0, ctx);
-    }
-
-    /**
-     * WRITE：调用 ChatClient 流式生成（Reactor {@link Flux}）；与心跳共享同一多播上游（LLM 路径 {@code share()}；门控澄清路径 {@code cache()}）。
-     * 门控路径的 {@link #appendTurnToMemory} 在 {@link #chat} 中于订阅前同步调用，不在此链路的 {@code doOnComplete} 上挂载。
-     */
     private Flux<String> stageWrite(
             WorkflowTurnState ctx,
             Duration llmTimeout,
@@ -753,20 +537,6 @@ public class TravelAgent implements FinancialAnalystAgent {
         } catch (Exception e) {
             log.warn("empty_hits gate: chatMemory.add failed requestId={} error={}", ctx.requestId, e.toString());
         }
-    }
-
-    /**
-     * 承载单轮对话在各阶段之间传递的状态（mutable context object）。
-     * 术语：类似「请求作用域 DTO / turn state」，仅本类各 {@code stage*} 方法写入。
-     */
-    private PlanPhysicalStagePolicy.PhysicalStageFlags physicalStageFlags(WorkflowTurnState ctx) {
-        PlanV1 planV1;
-        try {
-            planV1 = planParser.parse(ctx.planJson);
-        } catch (PlanParseException e) {
-            throw new IllegalStateException("plan must parse after PlanParseCoordinator", e);
-        }
-        return PlanPhysicalStagePolicy.resolve(planV1);
     }
 
     static String guessCityForWeather(String userMessage) {

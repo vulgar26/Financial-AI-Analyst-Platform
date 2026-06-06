@@ -381,7 +381,7 @@ class TravelAgentWorkflowRuntimeR2Test {
                 false
         );
 
-        TravelAgent.captureRuntimeToolTrace(ctx, result);
+        MainChatWorkflowAdapter.captureRuntimeToolTrace(ctx, result);
 
         assertThat(ctx.runtimeToolTraces).hasSize(1);
         ToolTrace trace = ctx.runtimeToolTraces.get(0);
@@ -412,7 +412,7 @@ class TravelAgentWorkflowRuntimeR2Test {
                 false
         );
 
-        TravelAgent.captureRuntimeToolTrace(ctx, result);
+        MainChatWorkflowAdapter.captureRuntimeToolTrace(ctx, result);
 
         assertThat(ctx.workflowRuntimePath).isFalse();
         assertThat(ctx.runtimeStageTraces).isEmpty();
