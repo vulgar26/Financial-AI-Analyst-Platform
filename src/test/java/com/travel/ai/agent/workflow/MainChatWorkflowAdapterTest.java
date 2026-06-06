@@ -192,12 +192,12 @@ class MainChatWorkflowAdapterTest {
         AppAgentProperties properties = new AppAgentProperties();
         properties.getWorkflowRuntime().setEnabled(runtimeEnabled);
 
-        PlanParser serviceParser = realPlanParser();
         MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
         when(proposer.proposePlanJson(any(), any())).thenReturn(planJson);
         PlanService planService = new PlanService(
                 proposer,
-                new PlanParseCoordinator(serviceParser, hint -> planJson)
+                new PlanParseCoordinator(policyParser, hint -> planJson),
+                policyParser
         );
 
         QueryRewriter queryRewriter = mock(QueryRewriter.class);
@@ -222,7 +222,6 @@ class MainChatWorkflowAdapterTest {
                 toolInvocationService,
                 new GuardDecisionService(),
                 new PromptAssemblyService(null),
-                policyParser,
                 () -> true,
                 () -> true,
                 () -> 400,

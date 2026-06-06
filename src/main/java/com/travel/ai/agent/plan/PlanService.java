@@ -1,14 +1,19 @@
 package com.travel.ai.agent.plan;
 
 import com.travel.ai.plan.PlanParseCoordinator;
+import com.travel.ai.plan.PlanParseException;
+import com.travel.ai.plan.PlanParser;
+import com.travel.ai.plan.PlanPhysicalStagePolicy;
+import com.travel.ai.plan.PlanV1;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * PLAN stage business service for proposal, fallback, parse repair, and parse meta assembly.
  *
- * <p>This service does not mutate TravelAgent turn state, does not emit SSE,
- * and does not decide physical runtime stage flags in Pn1.</p>
+ * <p>This service does not mutate TravelAgent turn state and does not emit SSE.
+ * Pn2: it now also resolves the physical runtime stage flags from the effective
+ * plan JSON, so the orchestrator no longer re-parses the plan a second time.</p>
  */
 public final class PlanService {
 
@@ -16,10 +21,14 @@ public final class PlanService {
 
     private final MainLinePlanProposer mainLinePlanProposer;
     private final PlanParseCoordinator planParseCoordinator;
+    private final PlanParser planParser;
 
-    public PlanService(MainLinePlanProposer mainLinePlanProposer, PlanParseCoordinator planParseCoordinator) {
+    public PlanService(MainLinePlanProposer mainLinePlanProposer,
+                       PlanParseCoordinator planParseCoordinator,
+                       PlanParser planParser) {
         this.mainLinePlanProposer = mainLinePlanProposer;
         this.planParseCoordinator = planParseCoordinator;
+        this.planParser = planParser;
     }
 
     public PlanServiceResult plan(PlanServiceRequest request) {
@@ -78,14 +87,31 @@ public final class PlanService {
         throw new IllegalStateException("builtin default plan must parse");
     }
 
-    private static PlanServiceResult result(String planDraftSource, PlanParseCoordinator.Result r, String resolved) {
+    private PlanServiceResult result(String planDraftSource, PlanParseCoordinator.Result r, String resolved) {
         return new PlanServiceResult(
                 r.effectivePlanJson(),
                 planDraftSource,
                 r.outcome(),
                 r.attempts(),
-                resolved
+                resolved,
+                resolvePhysicalStageFlags(r.effectivePlanJson())
         );
+    }
+
+    /**
+     * Pn2：从 coordinator 产出的 effective plan JSON 推导物理阶段开关。
+     * <p>effective JSON 已由 {@link PlanParseCoordinator} 校验/修复，正常应可解析；
+     * 万一解析失败则兜底为「PLAN 后全跑」，与历史上主线 {@code physicalStageFlags(...)}
+     * 解析失败即视为异常、不静默跳过任何物理阶段的语义对齐。</p>
+     */
+    private PlanPhysicalStagePolicy.PhysicalStageFlags resolvePhysicalStageFlags(String effectivePlanJson) {
+        try {
+            PlanV1 planV1 = planParser.parse(effectivePlanJson);
+            return PlanPhysicalStagePolicy.resolve(planV1);
+        } catch (PlanParseException e) {
+            log.warn("[plan] physical_stage_flags_fallback effective plan unparsable: {}", e.toString());
+            return PlanPhysicalStagePolicy.PhysicalStageFlags.allStagesAfterPlan();
+        }
     }
 
     /**
