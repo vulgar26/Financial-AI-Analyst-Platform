@@ -70,10 +70,6 @@ management:
       enabled: true
     readinessstate:
       enabled: true
-weather:
-  api-key: ${WEATHER_API_KEY:}
-  # 兼容：HTTP 超时优先见 app.agent.tool-timeout；未迁移时仍读此毫秒值（见 WeatherTool）
-  timeout-ms: 3000
 
 app:
   memory:
@@ -158,7 +154,7 @@ app:
     total-timeout: 120s
     # 固定流水线阶段数上限（当前实现为 PLAN+RETRIEVE+TOOL+GUARD+WRITE 共 5 步；配置须 ≥5 否则拒绝该轮）
     max-steps: 8
-    # 工具 HTTP 超时（天气 OkHttp）；优先于 weather.timeout-ms
+    # 工具 HTTP 超时（market data 等 GovernedAgentTool）
     tool-timeout: 3s
     # WRITE 阶段 ChatClient 流式超时（应小于 total-timeout）
     llm-stream-timeout: 20s

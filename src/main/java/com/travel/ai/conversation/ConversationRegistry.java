@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class ConversationRegistry {
 
-    static final String KEY_PREFIX = "travel:chat:convreg:";
+    static final String KEY_PREFIX = "finance:chat:convreg:";
     private static final long TTL_DAYS = 30L;
 
     private final StringRedisTemplate stringRedisTemplate;

@@ -14,7 +14,7 @@ import java.util.Optional;
 @Component
 public class UserProfilePendingExtractionStore {
 
-    private static final String KEY_PREFIX = "travel:profile:pending:";
+    private static final String KEY_PREFIX = "finance:profile:pending:";
 
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;

@@ -1,8 +1,6 @@
 package com.travel.ai.agent.tool;
 
 import com.travel.ai.agent.MarketDataTool;
-import com.travel.ai.agent.WeatherTool;
-import com.travel.ai.config.AppAgentProperties;
 import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.tools.ToolCircuitBreaker;
 import com.travel.ai.tools.ToolExecutor;
@@ -18,7 +16,7 @@ class ToolInvocationServiceTest {
 
     @Test
     void noMatchingTool_returnsEmptyResult() {
-        ToolInvocationService service = service(weather(false, "weather"), market(false, "market"));
+        ToolInvocationService service = service(market(false, "market"));
 
         ToolInvocationResult result = service.invoke(request("plain question"));
 
@@ -29,10 +27,10 @@ class ToolInvocationServiceTest {
     }
 
     @Test
-    void marketDataTakesPriorityOverWeather() {
-        ToolInvocationService service = service(weather(true, "weather observation"), market(true, "market observation"));
+    void marketDataSelectedWhenItHandles() {
+        ToolInvocationService service = service(market(true, "market observation"));
 
-        ToolInvocationResult result = service.invoke(request("AAPL price and weather"));
+        ToolInvocationResult result = service.invoke(request("AAPL price"));
 
         assertThat(result.toolSelected()).isTrue();
         assertThat(result.selectedToolName()).isEqualTo("market_data");
@@ -43,14 +41,12 @@ class ToolInvocationServiceTest {
 
     @Test
     void disabledByPolicy_returnsPolicyDisabled() {
-        ToolInvocationService service = service(weather(false, "weather"), market(true, "market"));
+        ToolInvocationService service = service(market(true, "market"));
 
         ToolInvocationResult result = service.invoke(new ToolInvocationRequest(
                 "AAPL price",
                 "req-disabled",
-                true,
                 false,
-                100,
                 100
         ));
 
@@ -69,7 +65,6 @@ class ToolInvocationServiceTest {
         ToolCircuitBreaker circuitBreaker = new ToolCircuitBreaker(1, 30_000L);
         circuitBreaker.recordFailure("market_data");
         ToolInvocationService service = service(
-                weather(false, "weather"),
                 market(true, "market"),
                 circuitBreaker,
                 new ToolRateLimiter(10)
@@ -87,7 +82,6 @@ class ToolInvocationServiceTest {
     @Test
     void rateLimited_returnsRateLimited() {
         ToolInvocationService service = service(
-                weather(false, "weather"),
                 market(true, "market"),
                 new ToolCircuitBreaker(10, 30_000L),
                 new ToolRateLimiter(1)
@@ -106,7 +100,7 @@ class ToolInvocationServiceTest {
 
     @Test
     void success_buildsCompatiblePrefaceAndPolicy() {
-        ToolInvocationService service = service(weather(false, "weather"), market(true, "market observation"));
+        ToolInvocationService service = service(market(true, "market observation"));
 
         ToolInvocationResult result = service.invoke(request("AAPL price"));
 
@@ -133,12 +127,10 @@ class ToolInvocationServiceTest {
     @Test
     void timeoutAndError_mapOutcomes() {
         ToolInvocationResult timeout = service(
-                weather(false, "weather"),
                 throwingMarket(true, new SocketTimeoutException("timeout"))
         ).invoke(request("AAPL price"));
 
         ToolInvocationResult error = service(
-                weather(false, "weather"),
                 throwingMarket(true, new IllegalStateException("boom"))
         ).invoke(request("AAPL price"));
 
@@ -155,14 +147,12 @@ class ToolInvocationServiceTest {
 
     @Test
     void truncation_marksOutputTruncated() {
-        ToolInvocationService service = service(weather(false, "weather"), market(true, "abcdef"));
+        ToolInvocationService service = service(market(true, "abcdef"));
 
         ToolInvocationResult result = service.invoke(new ToolInvocationRequest(
                 "AAPL price",
                 "req-tool",
                 true,
-                true,
-                100,
                 3
         ));
 
@@ -172,40 +162,20 @@ class ToolInvocationServiceTest {
                 .contains("abc…");
     }
 
-    private static ToolInvocationService service(WeatherTool weatherTool, MarketDataTool marketDataTool) {
-        return service(weatherTool, marketDataTool, new ToolCircuitBreaker(10, 30_000L), new ToolRateLimiter(10));
+    private static ToolInvocationService service(MarketDataTool marketDataTool) {
+        return service(marketDataTool, new ToolCircuitBreaker(10, 30_000L), new ToolRateLimiter(10));
     }
 
     private static ToolInvocationService service(
-            WeatherTool weatherTool,
             MarketDataTool marketDataTool,
             ToolCircuitBreaker circuitBreaker,
             ToolRateLimiter rateLimiter
     ) {
-        return new ToolInvocationService(weatherTool, marketDataTool, circuitBreaker, rateLimiter);
+        return new ToolInvocationService(marketDataTool, circuitBreaker, rateLimiter);
     }
 
     private static ToolInvocationRequest request(String userMessage) {
-        return new ToolInvocationRequest(userMessage, "req-tool", true, true, 100, 100);
-    }
-
-    private static WeatherTool weather(boolean handles, String observation) {
-        return new WeatherTool(new AppAgentProperties()) {
-            @Override
-            public boolean shouldHandle(String userMessage) {
-                return handles;
-            }
-
-            @Override
-            public String resolveInput(String userMessage) {
-                return "weather-input";
-            }
-
-            @Override
-            public String observe(String input) {
-                return observation;
-            }
-        };
+        return new ToolInvocationRequest(userMessage, "req-tool", true, 100);
     }
 
     private static MarketDataTool market(boolean handles, String observation) {

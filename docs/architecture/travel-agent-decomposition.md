@@ -141,25 +141,31 @@ Does not own:
 
 ## TravelAgent Remaining Responsibilities
 
-`TravelAgent` currently remains responsible for:
+Update (Pn2 done): the pre-WRITE orchestration (PLAN/RETRIEVE/TOOL/GUARD,
+legacy + runtime paths) now lives in `MainChatWorkflowAdapter`; the mutable
+turn state is `WorkflowTurnState` (replacing the old inner `MainAgentTurnContext`);
+and `physicalStageFlags` resolution moved into `PlanService` (returned via
+`PlanServiceResult.physicalStageFlags()`), so the adapter no longer re-parses
+the plan.
+
+`TravelAgent` now only remains responsible for the WRITE / SSE shell:
 
 - `chat(...)` lifecycle
 - request id and MDC lifecycle
 - total timeout boundary
-- runtime feature flag split
-- legacy `runLinearStages(ctx)`
-- runtime `runLinearStagesWithRuntime(ctx)`
-- `MainAgentTurnContext` creation and service-result writeback
+- delegation to `mainChatWorkflowAdapter.runPreWriteWorkflow(ctx)` (which owns the
+  runtime feature-flag split internally)
 - `stageWrite(...)`
 - `ChatClient.stream()`
 - SSE stream assembly
 - heartbeat, done, and error handling
 - Redis memory special write for empty-hit clarify
-- runtime trace to stage-event bridge
-- runtime tool trace capture bridge
 - policy event aggregation into SSE
 - `plan_parse` SSE event assembly
-- `physicalStageFlags(ctx)` and `PlanPhysicalStagePolicy.resolve(...)`
+
+Removed entirely: the legacy `WeatherTool` (a `travel`-era example `@Tool`) and
+`TravelAgent.guessCityForWeather(...)`. The only governed tool is now
+`MarketDataTool` (mock).
 
 These remaining responsibilities are intentionally kept together until their risks are isolated.
 
@@ -180,29 +186,27 @@ Reasons:
 - Eval endpoint is deterministic and intentionally does not call `TravelAgent`.
 - Public event shape must not drift accidentally.
 
+## Completed Phases (previously "next candidates")
+
+### WorkflowTurnState Extraction — DONE
+
+`MainAgentTurnContext` was moved out of `TravelAgent` into a dedicated
+`com.travel.ai.agent.state.WorkflowTurnState` model.
+
+### MainChatWorkflowAdapter — DONE
+
+`com.travel.ai.agent.workflow.MainChatWorkflowAdapter` owns PLAN / RETRIEVE /
+TOOL / GUARD execution (both legacy and runtime paths) and returns state ready
+for WRITE. It does not own `stageWrite(...)`.
+
+### PlanService Phase Pn2 — DONE
+
+Physical stage flag resolution moved into `PlanService`: it parses the effective
+`planJson`, runs `PlanPhysicalStagePolicy.resolve(...)`, and returns the flags via
+`PlanServiceResult.physicalStageFlags()`. The adapter consumes them directly
+instead of re-parsing the plan.
+
 ## Next Candidate Phases
-
-### WorkflowTurnState Extraction
-
-Move `MainAgentTurnContext` out of `TravelAgent` into a dedicated state model.
-
-This is a good next structural step because most remaining adapter methods communicate through the same mutable context.
-
-### MainChatWorkflowAdapter
-
-Introduce an adapter that owns PLAN / RETRIEVE / TOOL / GUARD execution and returns a state ready for WRITE.
-
-Initial scope should not include `stageWrite(...)`.
-
-### PlanService Phase Pn2
-
-Move physical stage flag resolution into `PlanService`:
-
-- parse final `planJson`
-- run `PlanPhysicalStagePolicy.resolve(...)`
-- return `runRetrieve`, `runTool`, and `runGuard`
-
-This should be tested carefully because these flags control whether RETRIEVE, TOOL, and GUARD run.
 
 ### MainSseChatAdapter
 

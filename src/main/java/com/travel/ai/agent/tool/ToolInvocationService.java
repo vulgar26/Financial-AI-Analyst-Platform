@@ -1,7 +1,6 @@
 package com.travel.ai.agent.tool;
 
 import com.travel.ai.agent.MarketDataTool;
-import com.travel.ai.agent.WeatherTool;
 import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.runtime.PolicyStageAnchor;
 import com.travel.ai.tools.GovernedAgentTool;
@@ -24,18 +23,15 @@ import static com.travel.ai.tools.ToolExecutor.execute;
  */
 public final class ToolInvocationService {
 
-    private final WeatherTool weatherTool;
     private final MarketDataTool marketDataTool;
     private final ToolCircuitBreaker toolCircuitBreaker;
     private final ToolRateLimiter toolRateLimiter;
 
     public ToolInvocationService(
-            WeatherTool weatherTool,
             MarketDataTool marketDataTool,
             ToolCircuitBreaker toolCircuitBreaker,
             ToolRateLimiter toolRateLimiter
     ) {
-        this.weatherTool = weatherTool;
         this.marketDataTool = marketDataTool;
         this.toolCircuitBreaker = toolCircuitBreaker;
         this.toolRateLimiter = toolRateLimiter;
@@ -69,9 +65,6 @@ public final class ToolInvocationService {
         if (marketDataTool != null && marketDataTool.shouldHandle(userMessage)) {
             return marketDataTool;
         }
-        if (weatherTool != null && weatherTool.shouldHandle(userMessage)) {
-            return weatherTool;
-        }
         return null;
     }
 
@@ -79,13 +72,12 @@ public final class ToolInvocationService {
         String toolName = tool.name();
         boolean required = true;
         boolean enabled = switch (toolName) {
-            case "weather" -> request == null || request.weatherToolEnabled();
             case "market_data" -> request == null || request.marketDataToolEnabled();
             default -> true;
         };
         int summaryMaxChars = switch (toolName) {
             case "market_data" -> request != null ? request.marketDataSummaryMaxChars() : 0;
-            default -> request != null ? request.weatherSummaryMaxChars() : 0;
+            default -> 0;
         };
 
         if (!enabled) {

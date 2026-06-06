@@ -65,9 +65,7 @@ public final class MainChatWorkflowAdapter {
     private final ToolInvocationService toolInvocationService;
     private final GuardDecisionService guardDecisionService;
     private final PromptAssemblyService promptAssemblyService;
-    private final BooleanSupplier weatherToolEnabled;
     private final BooleanSupplier marketDataToolEnabled;
-    private final IntSupplier weatherSummaryMaxChars;
     private final IntSupplier marketDataSummaryMaxChars;
     private final Supplier<String> emptyHitsBehavior;
     private final int maxContextDocs;
@@ -80,9 +78,7 @@ public final class MainChatWorkflowAdapter {
                                    ToolInvocationService toolInvocationService,
                                    GuardDecisionService guardDecisionService,
                                    PromptAssemblyService promptAssemblyService,
-                                   BooleanSupplier weatherToolEnabled,
                                    BooleanSupplier marketDataToolEnabled,
-                                   IntSupplier weatherSummaryMaxChars,
                                    IntSupplier marketDataSummaryMaxChars,
                                    Supplier<String> emptyHitsBehavior,
                                    int maxContextDocs,
@@ -94,9 +90,7 @@ public final class MainChatWorkflowAdapter {
         this.toolInvocationService = Objects.requireNonNull(toolInvocationService, "toolInvocationService must not be null");
         this.guardDecisionService = Objects.requireNonNull(guardDecisionService, "guardDecisionService must not be null");
         this.promptAssemblyService = Objects.requireNonNull(promptAssemblyService, "promptAssemblyService must not be null");
-        this.weatherToolEnabled = Objects.requireNonNull(weatherToolEnabled, "weatherToolEnabled must not be null");
         this.marketDataToolEnabled = Objects.requireNonNull(marketDataToolEnabled, "marketDataToolEnabled must not be null");
-        this.weatherSummaryMaxChars = Objects.requireNonNull(weatherSummaryMaxChars, "weatherSummaryMaxChars must not be null");
         this.marketDataSummaryMaxChars = Objects.requireNonNull(marketDataSummaryMaxChars, "marketDataSummaryMaxChars must not be null");
         this.emptyHitsBehavior = Objects.requireNonNull(emptyHitsBehavior, "emptyHitsBehavior must not be null");
         this.maxContextDocs = maxContextDocs;
@@ -288,9 +282,7 @@ public final class MainChatWorkflowAdapter {
         ToolInvocationResult invocation = toolInvocationService.invoke(new ToolInvocationRequest(
                 ctx.userMessage,
                 ctx.requestId,
-                weatherToolEnabled.getAsBoolean(),
                 marketDataToolEnabled.getAsBoolean(),
-                weatherSummaryMaxChars.getAsInt(),
                 marketDataSummaryMaxChars.getAsInt()
         ));
         ctx.toolPreface = invocation.toolPreface();
