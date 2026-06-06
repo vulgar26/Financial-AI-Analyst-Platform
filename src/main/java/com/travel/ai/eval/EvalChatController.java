@@ -150,14 +150,13 @@ public class EvalChatController {
             future.cancel(true);
             body = evalChatService.buildTotalTimeoutStubResponse(request, membershipCtx);
         } catch (ExecutionException e) {
+            // 流水线内未预期异常（如检索链路故障）降级为带 error_code 的 200，而非冒泡成 500。
+            // 与 TimeoutException 分支一致，走同一套 meta/latency 收尾。Error 仍向上抛（JVM 级故障不应吞）。
             Throwable c = e.getCause();
-            if (c instanceof RuntimeException re) {
-                throw re;
-            }
             if (c instanceof Error err) {
                 throw err;
             }
-            throw new IllegalStateException(c);
+            body = evalChatService.buildInternalErrorStubResponse(request, membershipCtx);
         }
 
         // 先走同一套 meta/capabilities 拼装，保证契约字段始终齐全；空 query 仅覆盖 answer/behavior。

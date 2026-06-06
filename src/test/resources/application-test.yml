@@ -5,6 +5,11 @@ spring:
       api-key: sk-test-placeholder-not-used-in-these-tests
 
 app:
+  knowledge:
+    # 集成测试不预灌种子知识：KnowledgeInitializer 启动期会对种子文档做真实 DashScope embedding，
+    # 测试只有占位 api-key → 401 直接拖垮 ApplicationContext。需要向量检索的用例自行 mock EmbeddingModel。
+    init:
+      enabled: false
   conversation:
     require-registration: false
     # 短于生产默认，便于断言「超长 query」400 而不把超长字符串塞进每个用例

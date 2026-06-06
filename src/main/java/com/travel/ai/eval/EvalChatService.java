@@ -89,6 +89,9 @@ public class EvalChatService {
     /** 与主线 SSE {@code TravelAgent} 总超时提示对齐的评测归因码。 */
     public static final String ERROR_CODE_AGENT_TOTAL_TIMEOUT = "AGENT_TOTAL_TIMEOUT";
 
+    /** 评测处理过程中线性流水线抛出未预期异常（如检索链路故障），降级为带归因码的 200 而非 500。 */
+    public static final String ERROR_CODE_AGENT_INTERNAL_ERROR = "AGENT_INTERNAL_ERROR";
+
     /** 断点库中 plan 指纹与当前 effective plan 不一致（见 {@link #maybePersistEvalCheckpoint} 写入口径）。 */
     public static final String ERROR_CODE_EVAL_CHECKPOINT_PLAN_MISMATCH = "EVAL_CHECKPOINT_PLAN_MISMATCH";
 
@@ -180,6 +183,38 @@ public class EvalChatService {
         response.setBehavior("clarify");
         response.setErrorCode(ERROR_CODE_AGENT_TOTAL_TIMEOUT);
         response.setAnswer("本轮评测请求处理超时（已达 app.agent.total-timeout），请缩短输入或稍后重试。");
+        return complete(response, request, membershipCtx, emptyEvidence());
+    }
+
+    /**
+     * 流水线抛出未预期异常时的降级响应：返回带 {@link #ERROR_CODE_AGENT_INTERNAL_ERROR} 的 200，
+     * 而非让异常冒泡成 500。与 TOOL 超时 / 总超时降级语义一致，避免基础设施抖动（如检索链路故障）
+     * 直接打成 500，便于评测侧按 error_code 归因。不回显异常细节，避免泄露内部信息。
+     */
+    public EvalChatResponse buildInternalErrorStubResponse(EvalChatRequest request, EvalMembershipHttpContext membershipCtx) {
+        String mode = request.getMode();
+        if (mode == null || mode.isBlank()) {
+            mode = "EVAL";
+        }
+        String requestId = UUID.randomUUID().toString();
+        EvalChatMeta meta = new EvalChatMeta(mode, requestId);
+        meta.setReplanCount(EvalChatMeta.P0_REPLAN_COUNT);
+        stampAgentTimeoutsOnMeta(meta);
+        meta.setStageOrder(Collections.emptyList());
+        meta.setStepCount(0);
+
+        EvalCapabilities capabilities = new EvalCapabilities(
+                new EvalRetrievalCapability(true, false),
+                new EvalToolsCapability(true, true),
+                new EvalStreamingCapability(false),
+                new EvalGuardrailsCapability(false, false, false)
+        );
+        EvalChatResponse response = new EvalChatResponse();
+        response.setCapabilities(capabilities);
+        response.setMeta(meta);
+        response.setBehavior("clarify");
+        response.setErrorCode(ERROR_CODE_AGENT_INTERNAL_ERROR);
+        response.setAnswer("本轮评测请求处理过程中发生内部错误，请稍后重试。");
         return complete(response, request, membershipCtx, emptyEvidence());
     }
 
@@ -962,7 +997,10 @@ public class EvalChatService {
             PlanPhysicalStagePolicy.PhysicalStageFlags pf = PlanPhysicalStagePolicy.resolve(pv);
             List<String> projected = EvalLinearAgentPipeline.projectedFullStageOrder(pf);
             int idx = projected.lastIndexOf(lastStage);
-            resumeEligible = idx >= 0 && idx < projected.size() - 1;
+            // resume_eligible 表示「last_completed_stage 能在投影 plan 中定位」，含末阶段。
+            // 续跑读取侧（resolveCheckpointResume）再按 idx 区分：未到末阶段→续跑；已到末阶段→resume_exhausted。
+            // 此处若排除末阶段（idx < size-1），会让 resume_exhausted 分支永不可达。
+            resumeEligible = idx >= 0;
         } catch (Exception e) {
             log.debug("[eval] checkpoint_resume_eligible_parse_failed: {}", e.toString());
         }

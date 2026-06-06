@@ -18,6 +18,10 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- 覆盖 Spring Boot 3.3.5 BOM 管理的 Testcontainers 1.19.x（内置 docker-java 3.3.x，
+             仅按 Docker API 1.32 协商，连不上 Docker Desktop 29.x（MinAPIVersion 1.40）。
+             1.21.x 自带新版 docker-java，支持新 Docker API。 -->
+        <testcontainers.version>1.21.4</testcontainers.version>
     </properties>
 
     <dependencies>
