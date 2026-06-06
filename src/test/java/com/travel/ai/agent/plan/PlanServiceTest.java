@@ -32,7 +32,7 @@ class PlanServiceTest {
     void planStageEnabled_proposerSuccess_recordsPrimarySuccess() {
         MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
         when(proposer.proposePlanJson("question", "req-plan")).thenReturn(VALID_WRITE_PLAN);
-        PlanService service = new PlanService(proposer, realCoordinator(hint -> VALID_WRITE_PLAN));
+        PlanService service = new PlanService(proposer, realCoordinator(hint -> VALID_WRITE_PLAN), realParser());
 
         PlanServiceResult result = service.plan(new PlanServiceRequest("question", "req-plan", true));
 
@@ -42,13 +42,17 @@ class PlanServiceTest {
         assertThat(result.planParseOutcome()).isEqualTo(PlanParseCoordinator.OUTCOME_SUCCESS);
         assertThat(result.planParseAttempts()).isEqualTo(1);
         assertThat(result.planParseResolved()).isEqualTo("primary");
+        // Pn2: WRITE-only plan resolves to no physical pre-write stages.
+        assertThat(result.physicalStageFlags().runRetrieve()).isFalse();
+        assertThat(result.physicalStageFlags().runTool()).isFalse();
+        assertThat(result.physicalStageFlags().runGuard()).isFalse();
     }
 
     @Test
     void planStageEnabled_proposerThrows_usesLlmFailedFallback() {
         MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
         when(proposer.proposePlanJson("question", "req-plan")).thenThrow(new IllegalStateException("llm down"));
-        PlanService service = new PlanService(proposer, realCoordinator(hint -> VALID_WRITE_PLAN));
+        PlanService service = new PlanService(proposer, realCoordinator(hint -> VALID_WRITE_PLAN), realParser());
 
         PlanServiceResult result = service.plan(new PlanServiceRequest("question", "req-plan", true));
 
@@ -62,7 +66,7 @@ class PlanServiceTest {
     @Test
     void planStageDisabled_usesConfigDisabledFallback() {
         MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
-        PlanService service = new PlanService(proposer, realCoordinator(hint -> VALID_WRITE_PLAN));
+        PlanService service = new PlanService(proposer, realCoordinator(hint -> VALID_WRITE_PLAN), realParser());
 
         PlanServiceResult result = service.plan(new PlanServiceRequest("question", "req-plan", false));
 
@@ -71,13 +75,17 @@ class PlanServiceTest {
         assertThat(result.planParseAttempts()).isEqualTo(1);
         assertThat(result.planParseResolved()).isEqualTo("primary");
         assertThat(result.planJson()).contains("\"notes\":\"plan_stage_disabled\"");
+        // Pn2: RETRIEVE->WRITE fallback runs RETRIEVE and (implied) GUARD, not TOOL.
+        assertThat(result.physicalStageFlags().runRetrieve()).isTrue();
+        assertThat(result.physicalStageFlags().runTool()).isFalse();
+        assertThat(result.physicalStageFlags().runGuard()).isTrue();
     }
 
     @Test
     void primaryParseFails_fallbackTemplateResolved() {
         MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
         when(proposer.proposePlanJson("question", "req-plan")).thenReturn("{\"plan_version\":\"v1\"}");
-        PlanService service = new PlanService(proposer, realCoordinator(hint -> "{\"plan_version\":\"v1\",\"steps\":[]}"));
+        PlanService service = new PlanService(proposer, realCoordinator(hint -> "{\"plan_version\":\"v1\",\"steps\":[]}"), realParser());
 
         PlanServiceResult result = service.plan(new PlanServiceRequest("question", "req-plan", true));
 
@@ -106,7 +114,8 @@ class PlanServiceTest {
         );
         PlanService service = new PlanService(
                 proposer,
-                new SequentialPlanParseCoordinator(failed, failed, success)
+                new SequentialPlanParseCoordinator(failed, failed, success),
+                realParser()
         );
 
         PlanServiceResult result = service.plan(new PlanServiceRequest("question", "req-plan", true));
@@ -130,7 +139,8 @@ class PlanServiceTest {
     void resultPlanJson_remainsParsable() throws Exception {
         PlanService service = new PlanService(
                 mock(MainLinePlanProposer.class),
-                realCoordinator(hint -> VALID_WRITE_PLAN)
+                realCoordinator(hint -> VALID_WRITE_PLAN),
+                realParser()
         );
 
         PlanServiceResult result = service.plan(new PlanServiceRequest("question", "req-plan", false));

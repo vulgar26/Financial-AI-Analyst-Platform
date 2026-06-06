@@ -17,10 +17,7 @@ import com.travel.ai.agent.tool.ToolInvocationRequest;
 import com.travel.ai.agent.tool.ToolInvocationResult;
 import com.travel.ai.agent.tool.ToolInvocationService;
 import com.travel.ai.config.AppAgentProperties;
-import com.travel.ai.plan.PlanParseException;
-import com.travel.ai.plan.PlanParser;
 import com.travel.ai.plan.PlanPhysicalStagePolicy;
-import com.travel.ai.plan.PlanV1;
 import com.travel.ai.runtime.LinearWorkflowRuntime;
 import com.travel.ai.runtime.StageEvent;
 import com.travel.ai.runtime.StageEventKind;
@@ -68,7 +65,6 @@ public final class MainChatWorkflowAdapter {
     private final ToolInvocationService toolInvocationService;
     private final GuardDecisionService guardDecisionService;
     private final PromptAssemblyService promptAssemblyService;
-    private final PlanParser planParser;
     private final BooleanSupplier weatherToolEnabled;
     private final BooleanSupplier marketDataToolEnabled;
     private final IntSupplier weatherSummaryMaxChars;
@@ -84,7 +80,6 @@ public final class MainChatWorkflowAdapter {
                                    ToolInvocationService toolInvocationService,
                                    GuardDecisionService guardDecisionService,
                                    PromptAssemblyService promptAssemblyService,
-                                   PlanParser planParser,
                                    BooleanSupplier weatherToolEnabled,
                                    BooleanSupplier marketDataToolEnabled,
                                    IntSupplier weatherSummaryMaxChars,
@@ -99,7 +94,6 @@ public final class MainChatWorkflowAdapter {
         this.toolInvocationService = Objects.requireNonNull(toolInvocationService, "toolInvocationService must not be null");
         this.guardDecisionService = Objects.requireNonNull(guardDecisionService, "guardDecisionService must not be null");
         this.promptAssemblyService = Objects.requireNonNull(promptAssemblyService, "promptAssemblyService must not be null");
-        this.planParser = Objects.requireNonNull(planParser, "planParser must not be null");
         this.weatherToolEnabled = Objects.requireNonNull(weatherToolEnabled, "weatherToolEnabled must not be null");
         this.marketDataToolEnabled = Objects.requireNonNull(marketDataToolEnabled, "marketDataToolEnabled must not be null");
         this.weatherSummaryMaxChars = Objects.requireNonNull(weatherSummaryMaxChars, "weatherSummaryMaxChars must not be null");
@@ -227,8 +221,7 @@ public final class MainChatWorkflowAdapter {
     }
 
     private PlanStageNode.PhysicalStageFlags stagePlanAndResolvePhysicalStages(WorkflowTurnState ctx) {
-        stagePlan(ctx);
-        PlanPhysicalStagePolicy.PhysicalStageFlags flags = physicalStageFlags(ctx);
+        PlanPhysicalStagePolicy.PhysicalStageFlags flags = stagePlan(ctx);
         return new PlanStageNode.PhysicalStageFlags(
                 flags.runRetrieve(),
                 flags.runTool(),
@@ -241,7 +234,7 @@ public final class MainChatWorkflowAdapter {
                 flags.runRetrieve(), flags.runTool(), flags.runGuard(), ctx.requestId);
     }
 
-    private void stagePlan(WorkflowTurnState ctx) {
+    private PlanPhysicalStagePolicy.PhysicalStageFlags stagePlan(WorkflowTurnState ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] PLAN start requestId={}", ctx.requestId);
         PlanServiceResult result = planService.plan(new PlanServiceRequest(
@@ -255,6 +248,7 @@ public final class MainChatWorkflowAdapter {
         ctx.planParseAttempts = result.planParseAttempts();
         ctx.planParseResolved = result.planParseResolved();
         logPreWriteStageBoundary(StageName.PLAN, t0, ctx);
+        return result.physicalStageFlags();
     }
 
     private void stageRetrieve(WorkflowTurnState ctx) {
@@ -391,16 +385,6 @@ public final class MainChatWorkflowAdapter {
         if (ctx != null && stage != null) {
             ctx.stageElapsedMs.put(stage, ms);
         }
-    }
-
-    private PlanPhysicalStagePolicy.PhysicalStageFlags physicalStageFlags(WorkflowTurnState ctx) {
-        PlanV1 planV1;
-        try {
-            planV1 = planParser.parse(ctx.planJson);
-        } catch (PlanParseException e) {
-            throw new IllegalStateException("plan must parse after PlanParseCoordinator", e);
-        }
-        return PlanPhysicalStagePolicy.resolve(planV1);
     }
 
     public static void captureRuntimeToolTrace(WorkflowTurnState ctx, ToolResult result) {

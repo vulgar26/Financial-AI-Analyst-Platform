@@ -179,7 +179,7 @@ public class TravelAgent implements FinancialAnalystAgent {
         this.planParser = planParser;
         this.appAgentProperties = appAgentProperties;
         this.profileExtractionCoordinator = profileExtractionCoordinator;
-        this.planService = new PlanService(mainLinePlanProposer, planParseCoordinator);
+        this.planService = new PlanService(mainLinePlanProposer, planParseCoordinator, planParser);
         this.retrieveService = new RetrieveService(queryRewriter, vectorStore);
         this.toolInvocationService = new ToolInvocationService(
                 weatherTool,
@@ -196,7 +196,6 @@ public class TravelAgent implements FinancialAnalystAgent {
                 toolInvocationService,
                 guardDecisionService,
                 promptAssemblyService,
-                planParser,
                 () -> weatherToolEnabled,
                 () -> marketDataToolEnabled,
                 () -> weatherSummaryMaxChars,
