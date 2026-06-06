@@ -4,9 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.travel.ai.TravelAiApplication;
 import com.travel.ai.plan.PlanParseCoordinator;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpEntity;
@@ -59,6 +63,21 @@ class TravelAiApplicationIntegrationTest {
 
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
+
+    /**
+     * 用 mock 顶替真实 DashScope EmbeddingModel：集成测试只有占位 api-key，
+     * 真实 embed() 会 401（既阻断上下文启动，也让 RETRIEVE 物理阶段 500）。
+     * 返回固定 1024 维向量（与 V1__init_pgvector.sql 的 vector(1024) 对齐）。
+     */
+    @MockBean
+    private EmbeddingModel embeddingModel;
+
+    @BeforeEach
+    void stubEmbedding() {
+        float[] vec = new float[1024];
+        vec[0] = 1.0f;
+        Mockito.when(embeddingModel.embed(Mockito.anyString())).thenReturn(vec);
+    }
 
     @Test
     void contextLoads() {
@@ -149,6 +168,27 @@ class TravelAiApplicationIntegrationTest {
 
         assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(res.getBody()).isNotNull().contains("\"behavior\"");
+    }
+
+    /**
+     * 检索链路抛未预期异常时，/api/v1/eval/chat 应降级为带 error_code 的 200，而非 500。
+     * 通过让 embedding mock 在本用例抛异常来强制 RETRIEVE 阶段失败。
+     */
+    @Test
+    void evalChatRetrievalFailureDegradesTo200WithErrorCode() {
+        Mockito.when(embeddingModel.embed(Mockito.anyString()))
+                .thenThrow(new RuntimeException("simulated embedding failure"));
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Eval-Gateway-Key", "it-eval-gateway-key");
+        String body = "{\"query\":\"ping\",\"mode\":\"EVAL\"}";
+        HttpEntity<String> entity = new HttpEntity<>(body, headers);
+
+        ResponseEntity<String> res = restTemplate.postForEntity("/api/v1/eval/chat", entity, String.class);
+
+        assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(res.getBody()).isNotNull().contains("AGENT_INTERNAL_ERROR");
     }
 
     @Test
