@@ -208,7 +208,6 @@ class MainChatWorkflowAdapterTest {
         RetrieveService retrieveService = new RetrieveService(queryRewriter, vectorStore);
 
         ToolInvocationService toolInvocationService = new ToolInvocationService(
-                null,
                 new MarketDataTool(),
                 null,
                 null
@@ -223,8 +222,6 @@ class MainChatWorkflowAdapterTest {
                 new GuardDecisionService(),
                 new PromptAssemblyService(null),
                 () -> true,
-                () -> true,
-                () -> 400,
                 () -> 600,
                 () -> "clarify",
                 5,

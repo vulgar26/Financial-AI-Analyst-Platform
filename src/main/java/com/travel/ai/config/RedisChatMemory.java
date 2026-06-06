@@ -25,7 +25,7 @@ import java.util.stream.Collectors;
 public class RedisChatMemory implements ChatMemory {
 
     private static final Logger log = LoggerFactory.getLogger(RedisChatMemory.class);
-    private static final String KEY_PREFIX = "travel:chat:memory:";
+    private static final String KEY_PREFIX = "finance:chat:memory:";
     private static final int MAX_MESSAGES = 20;
     private static final long EXPIRE_DAYS = 1;
 
@@ -64,7 +64,7 @@ public class RedisChatMemory implements ChatMemory {
     }
 
     /**
-     * 扫描并删除 {@code travel:chat:memory:{username}:*} 下全部键（慎用；用于删除画像时可选清理会话）。
+     * 扫描并删除 {@code finance:chat:memory:{username}:*} 下全部键（慎用；用于删除画像时可选清理会话）。
      *
      * @return 删除的键数量
      */

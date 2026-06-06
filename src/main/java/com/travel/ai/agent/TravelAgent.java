@@ -108,7 +108,6 @@ public class TravelAgent implements FinancialAnalystAgent {
 
     private final ChatClient chatClient;
     private final ChatMemory chatMemory;
-    private final WeatherTool weatherTool;
     private final MarketDataTool marketDataTool;
     private final com.travel.ai.tools.ToolCircuitBreaker toolCircuitBreaker;
     private final com.travel.ai.tools.ToolRateLimiter toolRateLimiter;
@@ -122,12 +121,6 @@ public class TravelAgent implements FinancialAnalystAgent {
     private final ToolInvocationService toolInvocationService;
     private final PromptAssemblyService promptAssemblyService;
     private final MainChatWorkflowAdapter mainChatWorkflowAdapter;
-
-    @Value("${app.tools.weather.enabled:true}")
-    private boolean weatherToolEnabled;
-
-    @Value("${app.tools.weather.summary-max-chars:400}")
-    private int weatherSummaryMaxChars;
 
     @Value("${app.tools.market.enabled:true}")
     private boolean marketDataToolEnabled;
@@ -161,7 +154,6 @@ public class TravelAgent implements FinancialAnalystAgent {
                        RedisChatMemory chatMemory,
                        VectorStore vectorStore,
                        QueryRewriter queryRewriter,
-                       WeatherTool weatherTool,
                        MarketDataTool marketDataTool,
                        com.travel.ai.tools.ToolCircuitBreaker toolCircuitBreaker,
                        com.travel.ai.tools.ToolRateLimiter toolRateLimiter,
@@ -172,7 +164,6 @@ public class TravelAgent implements FinancialAnalystAgent {
                        UserProfileService userProfileService,
                        ProfileExtractionCoordinator profileExtractionCoordinator) {
         this.chatMemory = chatMemory;
-        this.weatherTool = weatherTool;
         this.marketDataTool = marketDataTool;
         this.toolCircuitBreaker = toolCircuitBreaker;
         this.toolRateLimiter = toolRateLimiter;
@@ -182,7 +173,6 @@ public class TravelAgent implements FinancialAnalystAgent {
         this.planService = new PlanService(mainLinePlanProposer, planParseCoordinator, planParser);
         this.retrieveService = new RetrieveService(queryRewriter, vectorStore);
         this.toolInvocationService = new ToolInvocationService(
-                weatherTool,
                 marketDataTool,
                 toolCircuitBreaker,
                 toolRateLimiter
@@ -196,9 +186,7 @@ public class TravelAgent implements FinancialAnalystAgent {
                 toolInvocationService,
                 guardDecisionService,
                 promptAssemblyService,
-                () -> weatherToolEnabled,
                 () -> marketDataToolEnabled,
-                () -> weatherSummaryMaxChars,
                 () -> marketDataSummaryMaxChars,
                 () -> emptyHitsBehavior,
                 MAX_CONTEXT_DOCS,
@@ -210,7 +198,6 @@ public class TravelAgent implements FinancialAnalystAgent {
                         MessageChatMemoryAdvisor.builder(chatMemory).build()
                 )
                 .defaultAdvisors(new SimpleLoggerAdvisor())
-                .defaultTools(weatherTool)
                 .defaultOptions(
                         DashScopeChatOptions.builder()
                                 .topP(0.7)
@@ -536,20 +523,6 @@ public class TravelAgent implements FinancialAnalystAgent {
         } catch (Exception e) {
             log.warn("empty_hits gate: chatMemory.add failed requestId={} error={}", ctx.requestId, e.toString());
         }
-    }
-
-    static String guessCityForWeather(String userMessage) {
-        if (userMessage == null || userMessage.isBlank()) {
-            return "北京";
-        }
-        // 仅做最小启发式：若包含“北京/上海/杭州/成都/广州/深圳”，取其一；否则用默认值。
-        if (userMessage.contains("北京")) return "北京";
-        if (userMessage.contains("上海")) return "上海";
-        if (userMessage.contains("杭州")) return "杭州";
-        if (userMessage.contains("成都")) return "成都";
-        if (userMessage.contains("广州")) return "广州";
-        if (userMessage.contains("深圳")) return "深圳";
-        return "北京";
     }
 
 }
