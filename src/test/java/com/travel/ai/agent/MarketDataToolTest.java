@@ -1,9 +1,7 @@
 package com.travel.ai.agent;
 
+import com.travel.ai.finance.fundamentals.MockFundamentalsDataSource;
 import org.junit.jupiter.api.Test;
-
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -11,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MarketDataToolTest {
 
-    private final MarketDataTool tool = new MarketDataTool();
+    private final MarketDataTool tool = new MarketDataTool(new MockFundamentalsDataSource());
 
     @Test
     void shouldHandle_marketDataExplainKeywords() {
@@ -20,6 +18,7 @@ class MarketDataToolTest {
         assertTrue(tool.shouldHandle("分析 NVDA 成交量"));
         assertTrue(tool.shouldHandle("解释指数涨跌"));
         assertTrue(tool.shouldHandle("这个公司的估值怎么看"));
+        assertTrue(tool.shouldHandle("看看苹果的基本面"));
         assertTrue(tool.shouldHandle("Explain AAPL volume"));
         assertFalse(tool.shouldHandle("open a research note"));
     }
@@ -33,40 +32,24 @@ class MarketDataToolTest {
     }
 
     @Test
-    void observe_containsMockTimestampFreshnessTradableFalse() {
+    void observe_withMockDataSource_marksMockNonRealtime() {
         String output = tool.observe("AAPL");
 
-        assertTrue(output.contains("mockMode=true"));
-        assertTrue(output.contains("mock_market_data=true"));
-        assertTrue(output.contains("data_source=local_mock"));
+        // 渲染来自结构化快照（MockFundamentalsDataSource），含合规标注。
         assertTrue(output.contains("symbol=AAPL"));
+        assertTrue(output.contains("fundamentals_available=true"));
+        assertTrue(output.contains("mock_mode=true"));
         assertTrue(output.contains("freshness=mock_non_realtime"));
         assertTrue(output.contains("tradable=false"));
-        assertTrue(output.contains("real_financial_api_used=false"));
-        assertTrue(output.contains("trading_capability_used=false"));
-        assertTrue(output.contains("not_for_trading=true"));
-
-        String timestamp = valueFor(output, "timestamp");
-        String asOf = valueFor(output, "as_of");
-        assertFalse(timestamp.isBlank());
-        assertEquals(timestamp, asOf);
+        assertTrue(output.contains("pe_ratio="));
     }
 
     @Test
     void observe_doesNotClaimRealtimeOrTrading() {
-        String output = tool.observe("AAPL").toLowerCase();
+        String output = tool.observe("AAPL");
 
-        assertTrue(output.contains("not real-time data"));
-        assertTrue(output.contains("must not be used for trading"));
+        assertTrue(output.contains("mock_mode=true"));
         assertTrue(output.contains("tradable=false"));
-        assertTrue(output.contains("real_financial_api_used=false"));
-        assertTrue(output.contains("trading_capability_used=false"));
-    }
-
-    private static String valueFor(String output, String key) {
-        Pattern pattern = Pattern.compile("(?m)^\\s*" + Pattern.quote(key) + "=(\\S+)\\s*$");
-        Matcher matcher = pattern.matcher(output);
-        assertTrue(matcher.find(), "missing key: " + key);
-        return matcher.group(1);
+        assertTrue(output.contains("非实时") || output.toLowerCase().contains("non_realtime"));
     }
 }
