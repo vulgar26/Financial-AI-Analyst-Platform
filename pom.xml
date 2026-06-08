@@ -71,6 +71,15 @@
             <version>1.1.2</version>
         </dependency>
 
+        <!-- 向量库：Spring AI 官方 pgvector starter（替换自研 PgVectorStore）。
+             自动配置 PgVectorStore bean，行为由 application.yml 的 spring.ai.vectorstore.pgvector 驱动
+             （initialize-schema=false：表结构仍由 Flyway V1__init_pgvector.sql 管理）。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+            <version>1.1.2</version>
+        </dependency>
+
         <!-- Redis -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
