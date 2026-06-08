@@ -72,6 +72,17 @@ management:
       enabled: true
 
 app:
+  finance:
+    # 真实基本面数据源（Financial Modeling Prep）。
+    # API key 走环境变量 FMP_API_KEY 注入；未配置时自动降级 MockFundamentalsDataSource，
+    # 使项目无 key 也能启动 / 测试 / 跑 CI。绝不把 key 写进代码或提交。
+    fmp:
+      api-key: ${FMP_API_KEY:}
+      base-url: https://financialmodelingprep.com/stable
+      enabled: true
+      cache-ttl-seconds: 21600
+      cache-max-size: 500
+      timeout-ms: 5000
   memory:
     long-term:
       # 默认关闭：开启后才会从库加载画像，并在 inject-into-prompt=true 时注入主线 WRITE 前 prompt
