@@ -63,6 +63,14 @@
             <version>1.1.2.0</version>
         </dependency>
 
+        <!-- Chat 模型：Anthropic（Claude）官方 starter，与底层 spring-ai 1.1.2 对齐。
+             chat 主模型用它；DashScope starter 保留用于 embedding。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-anthropic</artifactId>
+            <version>1.1.2</version>
+        </dependency>
+
         <!-- Redis -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

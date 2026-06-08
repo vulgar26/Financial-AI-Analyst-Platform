@@ -29,14 +29,24 @@ spring:
       port: 16379
 
   # Spring AI配置
+  autoconfigure:
+    exclude:
+      # 排除 DashScope 的 chat 自动配置：chat 主模型改用 Anthropic（Claude），
+      # 避免两个 ChatModel bean 冲突。DashScope 仅保留 embedding 自动配置（RAG 用）。
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeChatAutoConfiguration
   ai:
-    dashscope:
-      api-key: ${SPRING_AI_DASHSCOPE_API_KEY:}
+    # Chat 主模型：Anthropic（Claude），经中转站。token/base-url 走环境变量，绝不写死。
+    anthropic:
+      base-url: ${ANTHROPIC_BASE_URL:}
+      api-key: ${ANTHROPIC_AUTH_TOKEN:}
       chat:
-        model: qwen3.5-plus
         options:
+          model: ${ANTHROPIC_CHAT_MODEL:claude-sonnet-4-5-20250929}
           temperature: 0.7
           max-tokens: 2000
+    # DashScope 仅保留用于 embedding（RAG 向量检索）；chat 不再用它。
+    dashscope:
+      api-key: ${SPRING_AI_DASHSCOPE_API_KEY:}
     vectorstore:
       pgvector:
         initialize-schema: false

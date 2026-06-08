@@ -1,6 +1,12 @@
 # 集成测试（Testcontainers）：密钥占位即可，不向公网发起真实 LLM 调用
 spring:
   ai:
+    # chat 主模型 Anthropic：占位非空 base-url + 占位 key，仅让 bean 能创建。
+    # AnthropicApi 构造时校验 base-url 非空，空串会拖垮 ApplicationContext；
+    # 测试不触发真实 chat 调用，所以占位即可。
+    anthropic:
+      base-url: http://localhost/anthropic-placeholder-not-used
+      api-key: sk-ant-test-placeholder-not-used
     dashscope:
       api-key: sk-test-placeholder-not-used-in-these-tests
 
