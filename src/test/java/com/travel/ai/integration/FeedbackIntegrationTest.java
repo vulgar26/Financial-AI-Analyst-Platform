@@ -37,7 +37,7 @@ class FeedbackIntegrationTest {
     @Container
     @ServiceConnection
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(IntegrationTestImages.postgresPgvector())
-            .withDatabaseName("ragent")
+            .withDatabaseName("finance")
             .withUsername("postgres")
             .withPassword("postgres");
 

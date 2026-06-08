@@ -9,7 +9,7 @@ spring:
     import: optional:classpath:application-local.yml
 
   datasource:
-    url: jdbc:postgresql://127.0.0.1:5432/ragent
+    url: jdbc:postgresql://127.0.0.1:5432/finance
     username: postgres
     password: postgres
     driver-class-name: org.postgresql.Driver
