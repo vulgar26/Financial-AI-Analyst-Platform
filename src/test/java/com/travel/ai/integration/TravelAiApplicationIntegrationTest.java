@@ -7,7 +7,11 @@ import com.travel.ai.plan.PlanParseCoordinator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -64,6 +68,9 @@ class TravelAiApplicationIntegrationTest {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    @Autowired
+    private VectorStore vectorStore;
+
     /**
      * 用 mock 顶替真实 DashScope EmbeddingModel：集成测试只有占位 api-key，
      * 真实 embed() 会 401（既阻断上下文启动，也让 RETRIEVE 物理阶段 500）。
@@ -77,6 +84,24 @@ class TravelAiApplicationIntegrationTest {
         float[] vec = new float[1024];
         vec[0] = 1.0f;
         Mockito.when(embeddingModel.embed(Mockito.anyString())).thenReturn(vec);
+        Mockito.when(embeddingModel.dimensions()).thenReturn(1024);
+        // 官方 PgVectorStore.add() 走批量 embedding：embed(List<Document>, options, BatchingStrategy)。
+        // 直接 stub 这个三参方法（store 真正调用的入口），按文档数返回等长向量列表，
+        // 绕开默认实现的 token 估算/分批逻辑，避免 mock 下返回空列表导致 add() 越界。
+        Mockito.when(embeddingModel.embed(
+                        Mockito.anyList(),
+                        Mockito.any(org.springframework.ai.embedding.EmbeddingOptions.class),
+                        Mockito.any(org.springframework.ai.embedding.BatchingStrategy.class)))
+                .thenAnswer(inv -> {
+                    java.util.List<?> docs = inv.getArgument(0);
+                    java.util.List<float[]> out = new java.util.ArrayList<>();
+                    for (int i = 0; i < docs.size(); i++) {
+                        float[] v = new float[1024];
+                        v[0] = 1.0f;
+                        out.add(v);
+                    }
+                    return out;
+                });
     }
 
     @Test
@@ -100,6 +125,35 @@ class TravelAiApplicationIntegrationTest {
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'eval_conversation_checkpoint'",
                 Integer.class);
         assertThat(ckpt).isEqualTo(1);
+    }
+
+    /**
+     * 替换为官方 Spring AI PgVectorStore 后的安全命门回归：
+     * 经官方 add() 写入两个不同 user_id 的文档（用真实 pgvector 容器），
+     * 用 user_id EQ 过滤检索时，必须只能拿到自己的文档，绝不串到别的用户。
+     * embedding mock 对所有文本返回同一向量 → 两条文档向量等距，只有 user_id 过滤能区分，
+     * 因此本测试是对「隔离靠过滤、不靠相似度」最严格的验证。
+     */
+    @Test
+    void officialPgVectorStoreIsolatesByUserId() {
+        String alice = "isolation-alice-" + UUID.randomUUID();
+        String bob = "isolation-bob-" + UUID.randomUUID();
+        vectorStore.add(java.util.List.of(
+                new Document("alice private note about apples", java.util.Map.of("user_id", alice)),
+                new Document("bob private note about apples", java.util.Map.of("user_id", bob))
+        ));
+
+        Filter.Expression aliceOnly = new Filter.Expression(
+                Filter.ExpressionType.EQ, new Filter.Key("user_id"), new Filter.Value(alice));
+        var hits = vectorStore.similaritySearch(SearchRequest.builder()
+                .query("apples").topK(10).similarityThreshold(0.0)
+                .filterExpression(aliceOnly).build());
+
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).allSatisfy(d ->
+                assertThat(d.getMetadata().get("user_id")).isEqualTo(alice));
+        assertThat(hits).noneSatisfy(d ->
+                assertThat(d.getText()).contains("bob"));
     }
 
     @Test
