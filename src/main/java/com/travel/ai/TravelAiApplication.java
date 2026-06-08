@@ -5,6 +5,7 @@ import com.travel.ai.config.AppConversationProperties;
 import com.travel.ai.config.AppEvalProperties;
 import com.travel.ai.config.AppFeedbackProperties;
 import com.travel.ai.config.AppMemoryProperties;
+import com.travel.ai.finance.fundamentals.FmpProperties;
 import com.travel.ai.task.AgentTaskProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -19,7 +20,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         AppEvalProperties.class,
         AppConversationProperties.class,
         AppMemoryProperties.class,
-        AppFeedbackProperties.class
+        AppFeedbackProperties.class,
+        FmpProperties.class
 })
 public class TravelAiApplication {
     public static void main(String[] args) {

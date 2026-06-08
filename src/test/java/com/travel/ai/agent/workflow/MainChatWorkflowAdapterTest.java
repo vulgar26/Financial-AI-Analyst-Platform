@@ -2,6 +2,7 @@ package com.travel.ai.agent.workflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.travel.ai.agent.MarketDataTool;
+import com.travel.ai.finance.fundamentals.MockFundamentalsDataSource;
 import com.travel.ai.agent.QueryRewriter;
 import com.travel.ai.agent.guard.GuardDecisionService;
 import com.travel.ai.agent.plan.MainLinePlanProposer;
@@ -208,7 +209,7 @@ class MainChatWorkflowAdapterTest {
         RetrieveService retrieveService = new RetrieveService(queryRewriter, vectorStore);
 
         ToolInvocationService toolInvocationService = new ToolInvocationService(
-                new MarketDataTool(),
+                new MarketDataTool(new MockFundamentalsDataSource()),
                 null,
                 null
         );

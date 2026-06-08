@@ -1,17 +1,24 @@
 package com.travel.ai.agent;
 
+import com.travel.ai.finance.fundamentals.FundamentalsDataSource;
+import com.travel.ai.finance.fundamentals.FundamentalsSnapshot;
+import com.travel.ai.finance.fundamentals.FundamentalsTextRenderer;
 import com.travel.ai.tools.GovernedAgentTool;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
- * Mock market data tool placeholder.
- * <p>
- * This does not call any real financial API. It only exercises the existing
- * tool governance path for financial-analysis semantics.
+ * 市场 / 基本面数据工具（受治理）。
+ *
+ * <p>职责边界（agent 语义）：判断要不要处理（{@link #shouldHandle}）、从用户消息抽取
+ * 股票代码（{@link #resolveInput}）。真正的取数交给 {@link FundamentalsDataSource}
+ * （外部 IO，可替换：真实 FMP / mock 降级），再由 {@link FundamentalsTextRenderer}
+ * 渲染成给 LLM 的文本。</p>
+ *
+ * <p>未配置 {@code FMP_API_KEY} 时，注入的是 MockFundamentalsDataSource（降级），
+ * 输出会标注 mock / 非实时 / 不可交易。</p>
  */
 @Component
 public class MarketDataTool implements GovernedAgentTool {
@@ -20,6 +27,12 @@ public class MarketDataTool implements GovernedAgentTool {
     private static final java.util.Set<String> TICKER_STOP_WORDS = java.util.Set.of(
             "WHAT", "IS", "THE", "FOR", "AND", "OR", "PRICE", "QUOTE", "VOLUME", "MARKET", "TICKER", "EXPLAIN"
     );
+
+    private final FundamentalsDataSource dataSource;
+
+    public MarketDataTool(FundamentalsDataSource dataSource) {
+        this.dataSource = dataSource;
+    }
 
     @Override
     public String name() {
@@ -35,6 +48,7 @@ public class MarketDataTool implements GovernedAgentTool {
         return q.contains("行情")
                 || q.contains("股价")
                 || q.contains("市场数据")
+                || q.contains("基本面")
                 || q.contains("p/e")
                 || PE_TOKEN_PATTERN.matcher(q).find()
                 || q.contains("成交量")
@@ -44,7 +58,8 @@ public class MarketDataTool implements GovernedAgentTool {
                 || q.contains("quote")
                 || q.contains("price")
                 || q.contains("volume")
-                || q.contains("ticker");
+                || q.contains("ticker")
+                || q.contains("fundamental");
     }
 
     @Override
@@ -63,23 +78,7 @@ public class MarketDataTool implements GovernedAgentTool {
 
     @Override
     public String observe(String input) {
-        String symbol = input == null || input.isBlank() ? "MOCK" : input;
-        Instant timestamp = Instant.now();
-        return """
-                mockMode=true
-                mock_market_data=true
-                data_source=local_mock
-                symbol=%s
-                timestamp=%s
-                as_of=%s
-                freshness=mock_non_realtime
-                tradable=false
-                real_financial_api_used=false
-                trading_capability_used=false
-                not_for_trading=true
-                last_price=123.45
-                change_pct=0.00
-                note=This is placeholder market data for agent workflow validation only. It is not real-time data and must not be used for trading.
-                """.formatted(symbol, timestamp, timestamp);
+        FundamentalsSnapshot snapshot = dataSource.fetch(input);
+        return FundamentalsTextRenderer.render(snapshot);
     }
 }

@@ -1,6 +1,7 @@
 package com.travel.ai.agent.tool;
 
 import com.travel.ai.agent.MarketDataTool;
+import com.travel.ai.finance.fundamentals.MockFundamentalsDataSource;
 import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.tools.ToolCircuitBreaker;
 import com.travel.ai.tools.ToolExecutor;
@@ -179,7 +180,7 @@ class ToolInvocationServiceTest {
     }
 
     private static MarketDataTool market(boolean handles, String observation) {
-        return new MarketDataTool() {
+        return new MarketDataTool(new MockFundamentalsDataSource()) {
             @Override
             public boolean shouldHandle(String userMessage) {
                 return handles;
@@ -198,7 +199,7 @@ class ToolInvocationServiceTest {
     }
 
     private static MarketDataTool throwingMarket(boolean handles, Exception exception) {
-        return new MarketDataTool() {
+        return new MarketDataTool(new MockFundamentalsDataSource()) {
             @Override
             public boolean shouldHandle(String userMessage) {
                 return handles;
