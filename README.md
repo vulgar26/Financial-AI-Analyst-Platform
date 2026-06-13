@@ -131,15 +131,11 @@ npm run dev
 - 对行情、新闻、财务数据必须尽量标注来源和数据时点。
 - 证据不足、检索空命中、工具失败或数据过期时应澄清或降级。
 
-更多说明见 [docs/FINANCE_AI_ANALYST.md](docs/FINANCE_AI_ANALYST.md)。
+合规边界在自用前提下的角色说明，以及项目定位，见 [docs/VISION.md](docs/VISION.md)。
 
 ## Roadmap
 
-长期架构演进方案见 [docs/roadmap/](docs/roadmap/)：
-
-- [Finance AI Agent 演进方案](docs/roadmap/finance-agent-roadmap.md)
-- [高并发异步任务系统演进方案](docs/roadmap/async-agent-runtime-roadmap.md)
-- [Eval Target Adapter / Evaluation Harness 统一接口方案](docs/roadmap/eval-harness-roadmap.md)
+近期砖块与远期愿景见 [docs/ROADMAP.md](docs/ROADMAP.md)。完整文档导航见 [docs/README.md](docs/README.md)。
 
 ## 已知限制
 
