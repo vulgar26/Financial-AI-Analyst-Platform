@@ -8,6 +8,7 @@ public record RetrieveRequest(
         String currentUser,
         String requestId,
         int maxContextDocs,
-        int topKPerQuery
+        int topKPerQuery,
+        double similarityThreshold
 ) {
 }

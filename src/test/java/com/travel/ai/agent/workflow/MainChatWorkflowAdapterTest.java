@@ -226,7 +226,8 @@ class MainChatWorkflowAdapterTest {
                 () -> 600,
                 () -> "clarify",
                 5,
-                2
+                2,
+                0.5
         );
     }
 
