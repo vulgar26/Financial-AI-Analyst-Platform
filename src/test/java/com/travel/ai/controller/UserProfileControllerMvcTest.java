@@ -45,7 +45,7 @@ class UserProfileControllerMvcTest {
         when(userProfileService.getForCurrentUser())
                 .thenReturn(new UserProfileService.UserProfileView(1, objectMapper.createObjectNode()));
 
-        for (String path : new String[]{"/travel/profile", "/analysis/profile", "/finance/profile"}) {
+        for (String path : new String[]{"/analysis/profile", "/finance/profile"}) {
             mockMvc.perform(get(path))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.schemaVersion").value(1))

@@ -97,7 +97,7 @@ class UserProfileExtractionIntegrationTest {
         String conv = "conv-extract-01";
         String extractBody = "{\"conversationId\":\"" + conv + "\",\"saveAsPending\":true}";
         ResponseEntity<String> ex = restTemplate.exchange(
-                "/travel/profile/extract-suggestion",
+                "/analysis/profile/extract-suggestion",
                 HttpMethod.POST,
                 new HttpEntity<>(extractBody, headers),
                 String.class);
@@ -105,7 +105,7 @@ class UserProfileExtractionIntegrationTest {
         assertThat(ex.getBody()).contains("\"pendingSaved\":true");
 
         ResponseEntity<String> pending = restTemplate.exchange(
-                "/travel/profile/pending-extraction?conversationId=" + conv,
+                "/analysis/profile/pending-extraction?conversationId=" + conv,
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);
@@ -114,7 +114,7 @@ class UserProfileExtractionIntegrationTest {
 
         String confirmBody = "{\"conversationId\":\"" + conv + "\"}";
         ResponseEntity<String> conf = restTemplate.exchange(
-                "/travel/profile/confirm-extraction",
+                "/analysis/profile/confirm-extraction",
                 HttpMethod.POST,
                 new HttpEntity<>(confirmBody, headers),
                 String.class);
@@ -122,7 +122,7 @@ class UserProfileExtractionIntegrationTest {
         assertThat(conf.getBody()).contains("fromConversation");
 
         ResponseEntity<String> get = restTemplate.exchange(
-                "/travel/profile",
+                "/analysis/profile",
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);

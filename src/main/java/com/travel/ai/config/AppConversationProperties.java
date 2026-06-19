@@ -10,10 +10,9 @@ public class AppConversationProperties {
 
     /**
      * {@code true}: only registered {@code conversationId} values may call the chat stream.
-     * Applies to preferred {@code /analysis/chat/**}, {@code /finance/chat/**} aliases,
-     * and legacy-compatible {@code /travel/chat/**}.
+     * Applies to {@code /analysis/chat/**} and its {@code /finance/chat/**} alias.
      */
-    // Applies to preferred /analysis/chat routes, /finance/chat aliases, and legacy-compatible /travel/chat routes.
+    // Applies to /analysis/chat routes and the /finance/chat alias.
     private boolean requireRegistration = false;
 
     /**

@@ -21,7 +21,7 @@ import java.util.Map;
  * P1-3：用户对回答的反馈（点赞/点踩/评分/短评），仅当前 JWT 用户；可选字段与评测 case / tags 对齐便于离线归因。
  */
 @RestController
-@RequestMapping({"/travel/feedback", "/analysis/feedback", "/finance/feedback"})
+@RequestMapping({"/analysis/feedback", "/finance/feedback"})
 public class FeedbackController {
 
     private final FeedbackService feedbackService;

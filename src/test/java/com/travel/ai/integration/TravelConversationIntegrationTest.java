@@ -77,7 +77,7 @@ class TravelConversationIntegrationTest {
 
     @Test
     void postConversations_withoutToken_returns401() {
-        ResponseEntity<String> res = restTemplate.postForEntity("/travel/conversations", HttpEntity.EMPTY, String.class);
+        ResponseEntity<String> res = restTemplate.postForEntity("/analysis/conversations", HttpEntity.EMPTY, String.class);
         assertThat(res.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
@@ -86,7 +86,7 @@ class TravelConversationIntegrationTest {
         String token = loginDemo();
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(token);
-        ResponseEntity<Map> res = restTemplate.postForEntity("/travel/conversations", new HttpEntity<>(headers), Map.class);
+        ResponseEntity<Map> res = restTemplate.postForEntity("/analysis/conversations", new HttpEntity<>(headers), Map.class);
         assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(res.getBody()).containsKeys("conversationId");
         assertThat(res.getBody().get("conversationId").toString()).matches(
@@ -100,7 +100,7 @@ class TravelConversationIntegrationTest {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(token);
         ResponseEntity<String> res = restTemplate.exchange(
-                "/travel/chat/bad@id?query=hi",
+                "/analysis/chat/bad@id?query=hi",
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);
@@ -117,7 +117,7 @@ class TravelConversationIntegrationTest {
             HttpHeaders headers = new HttpHeaders();
             headers.setBearerAuth(token);
             ResponseEntity<String> res = restTemplate.exchange(
-                    "/travel/chat/not-registered-1?query=hi",
+                    "/analysis/chat/not-registered-1?query=hi",
                     HttpMethod.GET,
                     new HttpEntity<>(headers),
                     String.class);
@@ -138,15 +138,14 @@ class TravelConversationIntegrationTest {
             HttpHeaders headers = new HttpHeaders();
             headers.setBearerAuth(token);
             ResponseEntity<Map> post = restTemplate.postForEntity(
-                    "/travel/conversations", new HttpEntity<>(headers), Map.class);
+                    "/analysis/conversations", new HttpEntity<>(headers), Map.class);
             String id = post.getBody().get("conversationId").toString();
             ResponseEntity<String> res = restTemplate.exchange(
-                    "/travel/chat/" + id + "?query=hi",
+                    "/analysis/chat/" + id + "?query=hi",
                     HttpMethod.GET,
                     new HttpEntity<>(headers),
                     String.class);
             assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(res.getHeaders().getFirst("Deprecation")).isEqualTo("true");
         } finally {
             appConversationProperties.setRequireRegistration(prev);
         }
@@ -163,7 +162,7 @@ class TravelConversationIntegrationTest {
         headers.setAccept(Collections.singletonList(MediaType.TEXT_EVENT_STREAM));
         String body = "{\"query\":\"hello from post\"}";
         ResponseEntity<String> res = restTemplate.exchange(
-                "/travel/chat/c1",
+                "/analysis/chat/c1",
                 HttpMethod.POST,
                 new HttpEntity<>(body, headers),
                 String.class);
@@ -180,7 +179,7 @@ class TravelConversationIntegrationTest {
         String longQuery = "x".repeat(257);
         String body = "{\"query\":\"" + longQuery + "\"}";
         ResponseEntity<String> res = restTemplate.exchange(
-                "/travel/chat/c1",
+                "/analysis/chat/c1",
                 HttpMethod.POST,
                 new HttpEntity<>(body, headers),
                 String.class);
@@ -195,7 +194,7 @@ class TravelConversationIntegrationTest {
         headers.setBearerAuth(token);
         String longQuery = "y".repeat(257);
         ResponseEntity<String> res = restTemplate.exchange(
-                "/travel/chat/c1?query=" + longQuery,
+                "/analysis/chat/c1?query=" + longQuery,
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);

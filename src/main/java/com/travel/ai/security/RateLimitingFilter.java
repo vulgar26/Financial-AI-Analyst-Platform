@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * <b>两类互不影响的配额</b>（与 {@code docs/UPGRADE_PLAN.md} 中 P0-1 / P1-1 对齐）：
  * <ul>
- *   <li><b>聊天 SSE</b>：路径前缀 {@code /travel/chat}、{@code /analysis/chat} 或 {@code /finance/chat}，按「已登录用户名」或「匿名 IP」限流，
+ *   <li><b>聊天 SSE</b>：路径前缀 {@code /analysis/chat} 或 {@code /finance/chat}，按「已登录用户名」或「匿名 IP」限流，
  *       防止对话接口刷爆 LLM/向量库。</li>
  *   <li><b>登录</b>：{@code POST /auth/login}，<b>仅按 IP</b> 限流（登录前尚无可靠用户身份），
  *       缓解对演示账号或未来用户表的暴力尝试。</li>
@@ -97,7 +97,7 @@ public class RateLimitingFilter extends OncePerRequestFilter {
             return;
         }
 
-        // 2) 聊天 SSE：兼容 legacy /travel/chat 与金融分析 alias。
+        // 2) 聊天 SSE：金融分析路由 /analysis/chat 与 /finance/chat。
         if (isChatPath(path)) {
             if (!tryConsumeChat(request)) {
                 write429(response);
@@ -125,8 +125,7 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     }
 
     private static boolean isChatPath(String path) {
-        return path.startsWith("/travel/chat")
-                || path.startsWith("/analysis/chat")
+        return path.startsWith("/analysis/chat")
                 || path.startsWith("/finance/chat");
     }
 
