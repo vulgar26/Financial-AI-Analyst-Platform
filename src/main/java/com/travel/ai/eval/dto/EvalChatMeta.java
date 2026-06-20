@@ -20,9 +20,11 @@ import java.util.Map;
 public class EvalChatMeta {
 
     /**
-     * P0 硬指标：禁止动态 replan 循环，对外 {@code replan_count} 必须恒为该值（eval 可回归统计）。
+     * Replan 上界（受控回边）：{@code replan_count} 的契约红线，任何样本必须 {@code <= } 该值，eval 可回归统计。
+     * <p>历史 P0 阶段曾把它锁死为 0（一刀切禁止动态 replan 循环）；引入双层封顶的有界受控回边后，
+     * 约定演进为「允许至多 1 次受控 replan，且必须可统计」——red line 从「恒为 0」升级为「&lt;= 1」。
      */
-    public static final int P0_REPLAN_COUNT = 0;
+    public static final int MAX_REPLAN_COUNT = 1;
 
     /**
      * 本轮模式：如 {@code EVAL}、{@code AGENT}；若请求体未传 {@code mode}，默认 {@code EVAL}。
@@ -50,7 +52,7 @@ public class EvalChatMeta {
     /** 实际执行过的阶段数；应与 {@code stage_order.length} 一致（串行计数）。 */
     private int stepCount;
 
-    /** P0 禁止 replan 循环，恒为 {@code 0}。 */
+    /** 本轮受控 replan（降阈值重查）发生次数，有界 {@code <= }{@link #MAX_REPLAN_COUNT}；未发生为 {@code 0}。 */
     private int replanCount;
 
     /**

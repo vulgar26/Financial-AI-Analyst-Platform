@@ -180,8 +180,9 @@ class LinearWorkflowRuntimeR2Test {
         AtomicInteger skipCalls = new AtomicInteger();
         GuardStageNode node = new GuardStageNode(new GuardStageNode.GuardStageDelegate() {
             @Override
-            public void stageGuard() {
+            public boolean stageGuard() {
                 guardCalls.incrementAndGet();
+                return false;
             }
 
             @Override
@@ -208,8 +209,9 @@ class LinearWorkflowRuntimeR2Test {
         AtomicInteger skipCalls = new AtomicInteger();
         GuardStageNode node = new GuardStageNode(new GuardStageNode.GuardStageDelegate() {
             @Override
-            public void stageGuard() {
+            public boolean stageGuard() {
                 guardCalls.incrementAndGet();
+                return false;
             }
 
             @Override

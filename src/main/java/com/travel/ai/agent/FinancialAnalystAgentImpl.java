@@ -158,7 +158,8 @@ public class FinancialAnalystAgentImpl implements FinancialAnalystAgent {
                        PlanParser planParser,
                        AppAgentProperties appAgentProperties,
                        UserProfileService userProfileService,
-                       ProfileExtractionCoordinator profileExtractionCoordinator) {
+                       ProfileExtractionCoordinator profileExtractionCoordinator,
+                       com.travel.ai.agent.guard.RetrievalRelevanceJudge relevanceJudge) {
         this.chatMemory = chatMemory;
         this.marketDataTool = marketDataTool;
         this.toolCircuitBreaker = toolCircuitBreaker;
@@ -181,6 +182,7 @@ public class FinancialAnalystAgentImpl implements FinancialAnalystAgent {
                 retrieveService,
                 toolInvocationService,
                 guardDecisionService,
+                relevanceJudge,
                 promptAssemblyService,
                 () -> marketDataToolEnabled,
                 () -> marketDataSummaryMaxChars,

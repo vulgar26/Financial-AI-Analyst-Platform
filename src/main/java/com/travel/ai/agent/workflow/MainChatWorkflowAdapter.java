@@ -3,6 +3,8 @@ package com.travel.ai.agent.workflow;
 import com.travel.ai.agent.guard.GuardDecisionRequest;
 import com.travel.ai.agent.guard.GuardDecisionResult;
 import com.travel.ai.agent.guard.GuardDecisionService;
+import com.travel.ai.agent.guard.RetrievalRelevanceJudge;
+import com.travel.ai.agent.guard.RetrieveEmptyHitGate;
 import com.travel.ai.agent.plan.PlanService;
 import com.travel.ai.agent.plan.PlanServiceRequest;
 import com.travel.ai.agent.plan.PlanServiceResult;
@@ -58,12 +60,19 @@ public final class MainChatWorkflowAdapter {
 
     private static final Logger log = LoggerFactory.getLogger(MainChatWorkflowAdapter.class);
 
+    /** 业务语义上限：一次降阈值探测足以判别真缺失/假零命中。引擎侧 maxRedirects 另作机械兜底。 */
+    private static final int MAX_RETRIEVAL_REPLANS = 1;
+
+    /** 第二刀相关性 replan 时，附加到用户问题前的改写提示，促使 query rewriter 换角度产出检索串。 */
+    private static final String REWRITE_HINT_PREFIX = "（上一次检索到的资料与问题不相关，请换一种角度、用不同的关键词重新表述这个问题）";
+
     private final AppAgentProperties appAgentProperties;
     private final LinearWorkflowRuntime linearWorkflowRuntime;
     private final PlanService planService;
     private final RetrieveService retrieveService;
     private final ToolInvocationService toolInvocationService;
     private final GuardDecisionService guardDecisionService;
+    private final RetrievalRelevanceJudge relevanceJudge;
     private final PromptAssemblyService promptAssemblyService;
     private final BooleanSupplier marketDataToolEnabled;
     private final IntSupplier marketDataSummaryMaxChars;
@@ -78,6 +87,7 @@ public final class MainChatWorkflowAdapter {
                                    RetrieveService retrieveService,
                                    ToolInvocationService toolInvocationService,
                                    GuardDecisionService guardDecisionService,
+                                   RetrievalRelevanceJudge relevanceJudge,
                                    PromptAssemblyService promptAssemblyService,
                                    BooleanSupplier marketDataToolEnabled,
                                    IntSupplier marketDataSummaryMaxChars,
@@ -91,6 +101,7 @@ public final class MainChatWorkflowAdapter {
         this.retrieveService = Objects.requireNonNull(retrieveService, "retrieveService must not be null");
         this.toolInvocationService = Objects.requireNonNull(toolInvocationService, "toolInvocationService must not be null");
         this.guardDecisionService = Objects.requireNonNull(guardDecisionService, "guardDecisionService must not be null");
+        this.relevanceJudge = Objects.requireNonNull(relevanceJudge, "relevanceJudge must not be null");
         this.promptAssemblyService = Objects.requireNonNull(promptAssemblyService, "promptAssemblyService must not be null");
         this.marketDataToolEnabled = Objects.requireNonNull(marketDataToolEnabled, "marketDataToolEnabled must not be null");
         this.marketDataSummaryMaxChars = Objects.requireNonNull(marketDataSummaryMaxChars, "marketDataSummaryMaxChars must not be null");
@@ -186,8 +197,8 @@ public final class MainChatWorkflowAdapter {
                 }),
                 new GuardStageNode(new GuardStageNode.GuardStageDelegate() {
                     @Override
-                    public void stageGuard() {
-                        MainChatWorkflowAdapter.this.stageGuard(ctx);
+                    public boolean stageGuard() {
+                        return MainChatWorkflowAdapter.this.stageGuard(ctx);
                     }
 
                     @Override
@@ -255,13 +266,30 @@ public final class MainChatWorkflowAdapter {
         ctx.currentUser = SecurityContextHolder.getContext().getAuthentication() != null
                 ? SecurityContextHolder.getContext().getAuthentication().getName()
                 : "anonymous";
+        // Replan 重查：本轮 GUARD 已判定假零命中并跳回时，用降级阈值放宽召回，判别真缺失/假零命中。
+        boolean replanned = ctx.retrievalReplanCount > 0;
+        double effectiveThreshold = replanned
+                ? appAgentProperties.getRag().getReplanSimilarityThreshold()
+                : similarityThreshold;
+        if (replanned) {
+            log.info("[stage] RETRIEVE replan threshold {}->{} attempt={} requestId={}",
+                    similarityThreshold, effectiveThreshold, ctx.retrievalReplanCount, ctx.requestId);
+        }
+        // 第二刀「换个问法」：相关性 replan 时给 query 改写加提示前缀，让 rewriter 产出不同角度的检索串
+        // （此处病根是「问法没问对」而非阈值太严，故核心是换 query，降阈值只是顺带放宽）。
+        String retrieveMessage = ctx.userMessage;
+        if (ctx.relevanceReplanRequested) {
+            retrieveMessage = REWRITE_HINT_PREFIX + (ctx.userMessage == null ? "" : ctx.userMessage);
+            log.info("[stage] RETRIEVE relevance-replan rewrite-hint applied requestId={}", ctx.requestId);
+            ctx.relevanceReplanRequested = false; // 一次性消费，避免污染后续判断
+        }
         RetrieveResult result = retrieveService.retrieve(new RetrieveRequest(
-                ctx.userMessage,
+                retrieveMessage,
                 ctx.currentUser,
                 ctx.requestId,
                 maxContextDocs,
                 topKPerQuery,
-                similarityThreshold
+                effectiveThreshold
         ));
         ctx.currentUser = result.currentUser();
         ctx.userFilter = new Filter.Expression(
@@ -301,7 +329,7 @@ public final class MainChatWorkflowAdapter {
         logPreWriteStageBoundary(StageName.TOOL, t0, ctx);
     }
 
-    private void stageGuard(WorkflowTurnState ctx) {
+    private boolean stageGuard(WorkflowTurnState ctx) {
         long t0 = System.nanoTime();
         log.info("[stage] GUARD start requestId={}", ctx.requestId);
 
@@ -311,6 +339,43 @@ public final class MainChatWorkflowAdapter {
                 emptyHitsBehavior.get(),
                 ctx.requestId
         ));
+
+        // Replan：纯零命中(无工具数据) + 本轮尚未 replan 过 → 建议跳回 RETRIEVE 用降级阈值再探一次。
+        // 仅 runtime 图编排路径有回边能承接 redirect；inline 直线基线不具备 replan 能力(能力开关语义)，
+        // 故 gate 在 workflowRuntimePath 上，inline 永远 false、照旧落澄清，行为与改动前完全一致。
+        // 命中 replan 时刻意不落地澄清状态，把判别机会让给重查；重查后仍空才由下一轮 GUARD 真正落澄清。
+        boolean replanRequested = ctx.workflowRuntimePath
+                && decision.reason() == RetrieveEmptyHitGate.Reason.APPLIED_CLARIFY_RAG_EMPTY
+                && ctx.retrievalReplanCount < MAX_RETRIEVAL_REPLANS;
+        if (replanRequested) {
+            ctx.retrievalReplanCount++;
+            log.info("[guard] replan requested empty_hits gate=replan reason=RAG_EMPTY attempt={} requestId={}",
+                    ctx.retrievalReplanCount, ctx.requestId);
+            logPreWriteStageBoundary(StageName.GUARD, t0, ctx);
+            return true;
+        }
+
+        // 第二刀：检索非空但可能「捞错了」——多问一步 LLM 裁判这几条能否支撑回答；
+        // 判不相关 → 复用同一条回边「换个问法重检」，与零命中 replan 共用计数器与上界。
+        // 仅 runtime 路径有回边；inline 不调裁判（无回边可承接，且省一次 LLM 调用）。
+        // fail-safe：裁判不可用(available=false)时绝不触发 replan，避免外部抖动变功能 bug。
+        if (ctx.workflowRuntimePath
+                && decision.reason() == RetrieveEmptyHitGate.Reason.SKIPPED_HAS_RETRIEVAL_HITS
+                && ctx.retrievalReplanCount < MAX_RETRIEVAL_REPLANS) {
+            RetrievalRelevanceJudge.Verdict verdict = relevanceJudge.judge(ctx.userMessage, ctx.docs);
+            if (verdict.available() && !verdict.relevant()) {
+                ctx.retrievalReplanCount++;
+                ctx.relevanceReplanRequested = true;
+                log.info("[guard] replan requested relevance gate=replan reason=NOT_RELEVANT attempt={} judge_reason='{}' requestId={}",
+                        ctx.retrievalReplanCount, verdict.reason(), ctx.requestId);
+                logPreWriteStageBoundary(StageName.GUARD, t0, ctx);
+                return true;
+            }
+            if (!verdict.available()) {
+                log.info("[guard] relevance judge unavailable, pass-through (no replan) requestId={}", ctx.requestId);
+            }
+        }
+
         ctx.skipLlmForEmptyHits = decision.skipLlm();
         ctx.emptyHitsClarifyBody = decision.clarifyBody() != null ? decision.clarifyBody() : "";
         ctx.emptyHitsGateLogCode = decision.emptyHitsGateLogCode();
@@ -327,6 +392,7 @@ public final class MainChatWorkflowAdapter {
         }
 
         logPreWriteStageBoundary(StageName.GUARD, t0, ctx);
+        return false;
     }
 
     private void applyRetrieveSkippedState(WorkflowTurnState ctx) {

@@ -29,6 +29,16 @@ public final class EvalRagGateScenarios {
             "dataset_tag:rag/low_conf"
     );
 
+    /**
+     * rag/replan_after_empty：首检索假零命中→受控回边降阈值重查→命中。
+     * 用于回归「有界 replan」：{@code replan_count=1}、{@code stage_order} 体现 RETRIEVE 重跑。
+     */
+    public static final List<String> REASONS_REPLAN_AFTER_EMPTY = List.of(
+            "first_pass_empty_hits",
+            "replan_lowered_similarity_threshold",
+            "second_pass_retrieved"
+    );
+
     /** 业务侧低置信：短 query / 指代不明 等 */
     public static final List<String> REASONS_LOW_CONFIDENCE_BUSINESS = List.of(
             "heuristic_low_confidence_business",
@@ -54,11 +64,15 @@ public final class EvalRagGateScenarios {
         if ("low_conf".equals(s) || "low_confidence".equals(s) || "rag_low_conf".equals(s)) {
             return Kind.LOW_CONFIDENCE;
         }
+        if ("replan_after_empty".equals(s) || "empty_then_replan".equals(s) || "rag_replan".equals(s)) {
+            return Kind.EMPTY_THEN_REPLAN;
+        }
         return null;
     }
 
     public enum Kind {
         EMPTY_HITS,
-        LOW_CONFIDENCE
+        LOW_CONFIDENCE,
+        EMPTY_THEN_REPLAN
     }
 }

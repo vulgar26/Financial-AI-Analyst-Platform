@@ -69,3 +69,6 @@ replay_pid*.log
 eval_run_*.json
 *_results.json
 docs/eval_exports/
+
+# Claude Code local session / memory (never commit)
+.claude/

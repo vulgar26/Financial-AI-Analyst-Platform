@@ -126,6 +126,12 @@ public class AppAgentProperties {
          * Spring AI 的默认值是 0.0（即不过滤），这正是「针对一条问却全库都检索出来」的病根。
          */
         private double similarityThreshold = 0.5;
+        /**
+         * Replan 重查时的降级相似度阈值。GUARD 检测到「假零命中」跳回 RETRIEVE 时启用，
+         * 比常规阈值更宽松，用于判别零命中是「知识真缺失」还是「阈值过严拦掉了相关片段」。
+         * 默认 0.35：放宽但不归零——归零等于退回 Spring AI「全库都算命中」的病根。
+         */
+        private double replanSimilarityThreshold = 0.35;
 
         public int getTopKPerQuery() {
             return topKPerQuery > 0 ? topKPerQuery : 2;
@@ -149,6 +155,14 @@ public class AppAgentProperties {
 
         public void setSimilarityThreshold(double similarityThreshold) {
             this.similarityThreshold = similarityThreshold;
+        }
+
+        public double getReplanSimilarityThreshold() {
+            return replanSimilarityThreshold >= 0.0 ? replanSimilarityThreshold : 0.35;
+        }
+
+        public void setReplanSimilarityThreshold(double replanSimilarityThreshold) {
+            this.replanSimilarityThreshold = replanSimilarityThreshold;
         }
     }
 }
