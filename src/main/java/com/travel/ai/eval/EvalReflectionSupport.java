@@ -12,7 +12,7 @@ import java.util.Map;
 
 /**
  * 评测用 <strong>Reflection / recovery</strong> 占位：写入 {@code meta.recovery_action} 与可选 {@code meta.self_check}，
- * 与 {@code replan_count=0}（禁止循环 replan）正交；不调用额外 LLM。
+ * 与受控 {@code replan_count}（有界 &lt;= 1，禁止无界循环 replan）正交；不调用额外 LLM。
  */
 public final class EvalReflectionSupport {
 

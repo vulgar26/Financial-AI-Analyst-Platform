@@ -165,7 +165,7 @@ public class EvalChatService {
         }
         String requestId = UUID.randomUUID().toString();
         EvalChatMeta meta = new EvalChatMeta(mode, requestId);
-        meta.setReplanCount(EvalChatMeta.P0_REPLAN_COUNT);
+        meta.setReplanCount(0);
         stampAgentTimeoutsOnMeta(meta);
         meta.setStageOrder(Collections.emptyList());
         meta.setStepCount(0);
@@ -198,7 +198,7 @@ public class EvalChatService {
         }
         String requestId = UUID.randomUUID().toString();
         EvalChatMeta meta = new EvalChatMeta(mode, requestId);
-        meta.setReplanCount(EvalChatMeta.P0_REPLAN_COUNT);
+        meta.setReplanCount(0);
         stampAgentTimeoutsOnMeta(meta);
         meta.setStageOrder(Collections.emptyList());
         meta.setStepCount(0);
@@ -344,7 +344,7 @@ public class EvalChatService {
         boolean skipPipeline = request.getQuery() == null || request.getQuery().isBlank();
 
         EvalChatMeta meta = new EvalChatMeta(mode, requestId);
-        meta.setReplanCount(EvalChatMeta.P0_REPLAN_COUNT);
+        meta.setReplanCount(0);
         stampAgentTimeoutsOnMeta(meta);
 
         EvalCapabilities capabilities = new EvalCapabilities(
@@ -544,6 +544,21 @@ public class EvalChatService {
             }
 
             Kind ragKind = physical.runRetrieve() ? EvalRagGateScenarios.resolve(request) : null;
+            if (ragKind == Kind.EMPTY_THEN_REPLAN) {
+                // 假零命中→受控回边降阈值重查→命中：RETRIEVE/GUARD 各跑两次，replan_count 记真实计数 1。
+                // 与 empty/low_conf 不同，这是 replan 成功的正路：最终命中、不门控澄清、不落 error_code。
+                meta.setStageOrder(List.of("PLAN", "RETRIEVE", "GUARD", "RETRIEVE", "GUARD"));
+                meta.setStepCount(5);
+                meta.setReplanCount(1);
+                meta.setRetrieveHitCount(1);
+                meta.setLowConfidence(false);
+                meta.setLowConfidenceReasons(EvalRagGateScenarios.REASONS_REPLAN_AFTER_EMPTY);
+                response.setAnswer("首检索零命中，降相似度阈值重查一次后命中并作答（评测 stub，有界受控 replan）。");
+                response.setBehavior("answer");
+                appendPolicyEvent(meta, "rag_gate", PolicyStageAnchor.POST_RETRIEVE.wireValue(), "answer", "stub_replan_after_empty",
+                        EvalRagGateScenarios.ERROR_CODE_RETRIEVE_EMPTY);
+                return complete(response, request, membershipCtx, evidence, planJsonForCheckpoint);
+            }
             if (ragKind != null) {
                 meta.setStageOrder(List.of("PLAN", "RETRIEVE"));
                 meta.setStepCount(2);

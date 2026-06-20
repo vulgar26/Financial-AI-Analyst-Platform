@@ -36,7 +36,7 @@ import java.util.concurrent.TimeoutException;
  * }</pre>
  *
  * <h2>Day3 证据 ①：正常 query（走满线性占位流水线）</h2>
- * <p>{@code step_count == stage_order.length}（此处为 5）；{@code replan_count} 恒为 0。</p>
+ * <p>{@code step_count == stage_order.length}（此处为 5）；普通流水线 {@code replan_count} 为 0，受控 replan 场景至多 1（见下）。</p>
  * <pre>{@code
  * {
  *   "answer": "Day3：meta 可观测稳定…",
