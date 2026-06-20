@@ -14,7 +14,7 @@ import java.util.Objects;
 /**
  * Mutable runtime context owned by one workflow execution.
  *
- * <p>Phase R1 keeps this separate from TravelAgent's MainAgentTurnContext.</p>
+ * <p>Phase R1 keeps this separate from FinancialAnalystAgentImpl's MainAgentTurnContext.</p>
  */
 public class WorkflowContext {
 

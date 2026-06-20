@@ -24,7 +24,7 @@ import java.util.Map;
  * 用户长期画像 CRUD：仅当前 JWT 主体；删除权见 {@link DeleteMapping}。
  */
 @RestController
-@RequestMapping({"/travel/profile", "/analysis/profile", "/finance/profile"})
+@RequestMapping({"/analysis/profile", "/finance/profile"})
 public class UserProfileController {
 
     private final UserProfileService userProfileService;
@@ -84,7 +84,7 @@ public class UserProfileController {
                 ? body.get("conversationId").asText()
                 : null;
         if (!ConversationIdValidator.isValid(conversationId)) {
-            return badRequest("INVALID_CONVERSATION_ID", "conversationId is required and must match /travel/chat rules");
+            return badRequest("INVALID_CONVERSATION_ID", "conversationId is required and must match /analysis/chat rules");
         }
         boolean saveAsPending = body != null && body.path("saveAsPending").asBoolean(false);
         try {

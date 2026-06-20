@@ -23,8 +23,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         AppFeedbackProperties.class,
         FmpProperties.class
 })
-public class TravelAiApplication {
+public class FinanceAgentApplication {
     public static void main(String[] args) {
-        SpringApplication.run(TravelAiApplication.class, args);
+        SpringApplication.run(FinanceAgentApplication.class, args);
     }
 }

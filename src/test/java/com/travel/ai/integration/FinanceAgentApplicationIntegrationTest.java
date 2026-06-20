@@ -2,7 +2,7 @@ package com.travel.ai.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.travel.ai.TravelAiApplication;
+import com.travel.ai.FinanceAgentApplication;
 import com.travel.ai.plan.PlanParseCoordinator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,10 +39,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * 需本机 Docker 可用；无 Docker 时本类会失败（符合集成测试预期）。
  */
-@SpringBootTest(classes = TravelAiApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = FinanceAgentApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
-class TravelAiApplicationIntegrationTest {
+class FinanceAgentApplicationIntegrationTest {
 
     @Container
     @ServiceConnection

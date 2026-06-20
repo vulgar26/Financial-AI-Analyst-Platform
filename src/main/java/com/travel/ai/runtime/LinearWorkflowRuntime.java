@@ -14,7 +14,7 @@ import java.util.Objects;
 /**
  * Minimal linear workflow runtime for Phase R1.
  *
- * <p>This runtime is intentionally not wired into TravelAgent yet.</p>
+ * <p>This runtime is intentionally not wired into FinancialAnalystAgentImpl yet.</p>
  */
 public class LinearWorkflowRuntime {
 

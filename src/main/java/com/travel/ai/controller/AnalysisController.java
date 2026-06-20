@@ -23,7 +23,7 @@ import reactor.core.publisher.Flux;
 import java.util.Map;
 
 /**
- * Financial analysis SSE aliases. Existing {@code /travel/**} routes remain available.
+ * Financial analysis SSE entrypoint. Exposes {@code /analysis/**} with {@code /finance/**} as a semantic alias.
  */
 @RestController
 @RequestMapping({"/analysis", "/finance"})

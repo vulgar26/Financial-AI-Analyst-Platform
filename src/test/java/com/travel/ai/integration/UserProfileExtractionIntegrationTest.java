@@ -2,8 +2,8 @@ package com.travel.ai.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.travel.ai.TravelAiApplication;
-import com.travel.ai.agent.TravelAgent;
+import com.travel.ai.FinanceAgentApplication;
+import com.travel.ai.agent.FinancialAnalystAgent;
 import com.travel.ai.profile.ProfileExtractionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,7 +34,7 @@ import static org.mockito.Mockito.when;
 /**
  * 画像抽取与待确认落库（{@link ProfileExtractionService} 打桩，避免外网 LLM）。
  */
-@SpringBootTest(classes = TravelAiApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = FinanceAgentApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
 @TestPropertySource(properties = "app.memory.auto-extract.enabled=true")
@@ -53,7 +53,7 @@ class UserProfileExtractionIntegrationTest {
             .withExposedPorts(6379);
 
     @MockBean
-    private TravelAgent travelAgent;
+    private FinancialAnalystAgent agent;
 
     @MockBean
     private ProfileExtractionService profileExtractionService;
@@ -97,7 +97,7 @@ class UserProfileExtractionIntegrationTest {
         String conv = "conv-extract-01";
         String extractBody = "{\"conversationId\":\"" + conv + "\",\"saveAsPending\":true}";
         ResponseEntity<String> ex = restTemplate.exchange(
-                "/travel/profile/extract-suggestion",
+                "/analysis/profile/extract-suggestion",
                 HttpMethod.POST,
                 new HttpEntity<>(extractBody, headers),
                 String.class);
@@ -105,7 +105,7 @@ class UserProfileExtractionIntegrationTest {
         assertThat(ex.getBody()).contains("\"pendingSaved\":true");
 
         ResponseEntity<String> pending = restTemplate.exchange(
-                "/travel/profile/pending-extraction?conversationId=" + conv,
+                "/analysis/profile/pending-extraction?conversationId=" + conv,
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);
@@ -114,7 +114,7 @@ class UserProfileExtractionIntegrationTest {
 
         String confirmBody = "{\"conversationId\":\"" + conv + "\"}";
         ResponseEntity<String> conf = restTemplate.exchange(
-                "/travel/profile/confirm-extraction",
+                "/analysis/profile/confirm-extraction",
                 HttpMethod.POST,
                 new HttpEntity<>(confirmBody, headers),
                 String.class);
@@ -122,7 +122,7 @@ class UserProfileExtractionIntegrationTest {
         assertThat(conf.getBody()).contains("fromConversation");
 
         ResponseEntity<String> get = restTemplate.exchange(
-                "/travel/profile",
+                "/analysis/profile",
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);

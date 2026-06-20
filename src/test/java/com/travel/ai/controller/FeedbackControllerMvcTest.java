@@ -44,7 +44,7 @@ class FeedbackControllerMvcTest {
     void post_creates_201_onLegacyAndAliases() throws Exception {
         when(feedbackService.submit(any(FeedbackSubmitRequest.class)))
                 .thenReturn(new FeedbackCreatedResponse(42L, Instant.parse("2026-04-23T12:00:00Z")));
-        for (String path : new String[]{"/travel/feedback", "/analysis/feedback", "/finance/feedback"}) {
+        for (String path : new String[]{"/analysis/feedback", "/finance/feedback"}) {
             mockMvc.perform(post(path)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"thumb\":\"down\",\"rating\":2}"))
@@ -62,7 +62,7 @@ class FeedbackControllerMvcTest {
         it.setThumb("up");
         it.setCreatedAt(Instant.parse("2026-04-23T10:00:00Z"));
         when(feedbackService.listMine(anyInt(), anyInt())).thenReturn(new FeedbackListResponse(List.of(it)));
-        for (String path : new String[]{"/travel/feedback", "/analysis/feedback", "/finance/feedback"}) {
+        for (String path : new String[]{"/analysis/feedback", "/finance/feedback"}) {
             mockMvc.perform(get(path))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.items[0].id").value(1))

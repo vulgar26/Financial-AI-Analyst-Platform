@@ -7,11 +7,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Feedback request body shared by preferred {@code /analysis/feedback}, finance alias
- * {@code /finance/feedback}, and legacy-compatible {@code /travel/feedback}.
+ * Feedback request body shared by {@code /analysis/feedback} and its {@code /finance/feedback} alias.
  */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-// Request body shared by preferred /analysis/feedback, /finance/feedback alias, and legacy-compatible /travel/feedback.
+// Request body shared by /analysis/feedback and the /finance/feedback alias.
 public class FeedbackSubmitRequest {
 
     private String conversationId;

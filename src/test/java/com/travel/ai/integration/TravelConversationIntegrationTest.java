@@ -1,7 +1,7 @@
 package com.travel.ai.integration;
 
-import com.travel.ai.TravelAiApplication;
-import com.travel.ai.agent.TravelAgent;
+import com.travel.ai.FinanceAgentApplication;
+import com.travel.ai.agent.FinancialAnalystAgent;
 import com.travel.ai.config.AppConversationProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,9 +33,9 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 /**
- * 会话登记与路径校验：{@link TravelAgent} 打桩，避免集成测试依赖外网 LLM。
+ * 会话登记与路径校验：{@link FinancialAnalystAgent} 打桩，避免集成测试依赖外网 LLM。
  */
-@SpringBootTest(classes = TravelAiApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = FinanceAgentApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
 @SuppressWarnings("unchecked")
@@ -54,7 +54,7 @@ class TravelConversationIntegrationTest {
             .withExposedPorts(6379);
 
     @MockBean
-    private TravelAgent travelAgent;
+    private FinancialAnalystAgent agent;
 
     @Autowired
     private TestRestTemplate restTemplate;
@@ -77,7 +77,7 @@ class TravelConversationIntegrationTest {
 
     @Test
     void postConversations_withoutToken_returns401() {
-        ResponseEntity<String> res = restTemplate.postForEntity("/travel/conversations", HttpEntity.EMPTY, String.class);
+        ResponseEntity<String> res = restTemplate.postForEntity("/analysis/conversations", HttpEntity.EMPTY, String.class);
         assertThat(res.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
@@ -86,7 +86,7 @@ class TravelConversationIntegrationTest {
         String token = loginDemo();
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(token);
-        ResponseEntity<Map> res = restTemplate.postForEntity("/travel/conversations", new HttpEntity<>(headers), Map.class);
+        ResponseEntity<Map> res = restTemplate.postForEntity("/analysis/conversations", new HttpEntity<>(headers), Map.class);
         assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(res.getBody()).containsKeys("conversationId");
         assertThat(res.getBody().get("conversationId").toString()).matches(
@@ -95,12 +95,12 @@ class TravelConversationIntegrationTest {
 
     @Test
     void getChat_invalidConversationId_returns400() {
-        when(travelAgent.chat(anyString(), anyString())).thenReturn(Flux.empty());
+        when(agent.chat(anyString(), anyString())).thenReturn(Flux.empty());
         String token = loginDemo();
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(token);
         ResponseEntity<String> res = restTemplate.exchange(
-                "/travel/chat/bad@id?query=hi",
+                "/analysis/chat/bad@id?query=hi",
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);
@@ -109,7 +109,7 @@ class TravelConversationIntegrationTest {
 
     @Test
     void getChat_strictMode_unregistered_returns403() {
-        when(travelAgent.chat(anyString(), anyString())).thenReturn(Flux.empty());
+        when(agent.chat(anyString(), anyString())).thenReturn(Flux.empty());
         boolean prev = appConversationProperties.isRequireRegistration();
         appConversationProperties.setRequireRegistration(true);
         try {
@@ -117,7 +117,7 @@ class TravelConversationIntegrationTest {
             HttpHeaders headers = new HttpHeaders();
             headers.setBearerAuth(token);
             ResponseEntity<String> res = restTemplate.exchange(
-                    "/travel/chat/not-registered-1?query=hi",
+                    "/analysis/chat/not-registered-1?query=hi",
                     HttpMethod.GET,
                     new HttpEntity<>(headers),
                     String.class);
@@ -129,7 +129,7 @@ class TravelConversationIntegrationTest {
 
     @Test
     void getChat_strictMode_registered_reachesAgent() {
-        when(travelAgent.chat(anyString(), anyString())).thenReturn(
+        when(agent.chat(anyString(), anyString())).thenReturn(
                 Flux.just(ServerSentEvent.builder("stub").build()));
         boolean prev = appConversationProperties.isRequireRegistration();
         appConversationProperties.setRequireRegistration(true);
@@ -138,15 +138,14 @@ class TravelConversationIntegrationTest {
             HttpHeaders headers = new HttpHeaders();
             headers.setBearerAuth(token);
             ResponseEntity<Map> post = restTemplate.postForEntity(
-                    "/travel/conversations", new HttpEntity<>(headers), Map.class);
+                    "/analysis/conversations", new HttpEntity<>(headers), Map.class);
             String id = post.getBody().get("conversationId").toString();
             ResponseEntity<String> res = restTemplate.exchange(
-                    "/travel/chat/" + id + "?query=hi",
+                    "/analysis/chat/" + id + "?query=hi",
                     HttpMethod.GET,
                     new HttpEntity<>(headers),
                     String.class);
             assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(res.getHeaders().getFirst("Deprecation")).isEqualTo("true");
         } finally {
             appConversationProperties.setRequireRegistration(prev);
         }
@@ -154,7 +153,7 @@ class TravelConversationIntegrationTest {
 
     @Test
     void postChat_withToken_reachesAgent() {
-        when(travelAgent.chat(anyString(), anyString())).thenReturn(
+        when(agent.chat(anyString(), anyString())).thenReturn(
                 Flux.just(ServerSentEvent.builder("stub").build()));
         String token = loginDemo();
         HttpHeaders headers = new HttpHeaders();
@@ -163,7 +162,7 @@ class TravelConversationIntegrationTest {
         headers.setAccept(Collections.singletonList(MediaType.TEXT_EVENT_STREAM));
         String body = "{\"query\":\"hello from post\"}";
         ResponseEntity<String> res = restTemplate.exchange(
-                "/travel/chat/c1",
+                "/analysis/chat/c1",
                 HttpMethod.POST,
                 new HttpEntity<>(body, headers),
                 String.class);
@@ -180,7 +179,7 @@ class TravelConversationIntegrationTest {
         String longQuery = "x".repeat(257);
         String body = "{\"query\":\"" + longQuery + "\"}";
         ResponseEntity<String> res = restTemplate.exchange(
-                "/travel/chat/c1",
+                "/analysis/chat/c1",
                 HttpMethod.POST,
                 new HttpEntity<>(body, headers),
                 String.class);
@@ -195,7 +194,7 @@ class TravelConversationIntegrationTest {
         headers.setBearerAuth(token);
         String longQuery = "y".repeat(257);
         ResponseEntity<String> res = restTemplate.exchange(
-                "/travel/chat/c1?query=" + longQuery,
+                "/analysis/chat/c1?query=" + longQuery,
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);

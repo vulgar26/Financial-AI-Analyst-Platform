@@ -15,10 +15,9 @@ public class AppFeedbackProperties {
 
     /**
      * Page-size limit for feedback listing.
-     * Preferred route: {@code GET /analysis/feedback}; finance alias: {@code GET /finance/feedback};
-     * legacy-compatible route: {@code GET /travel/feedback}.
+     * Route: {@code GET /analysis/feedback}; finance alias: {@code GET /finance/feedback}.
      */
-    // Applies to preferred /analysis/feedback, /finance/feedback alias, and legacy-compatible /travel/feedback.
+    // Applies to /analysis/feedback and the /finance/feedback alias.
     private int maxPageSize = 100;
 
     public int getMaxCommentChars() {

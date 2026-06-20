@@ -119,7 +119,7 @@ class EvalChatControllerTest {
         String expectedHash = RetrievalMembershipHasher.hitIdHashHex(kCase, "hit-abc-1");
 
         String body = """
-                {"query":"请帮我规划上海多日游的参考信息","mode":"EVAL"}
+                {"query":"请帮我整理贵州茅台的基本面参考信息","mode":"EVAL"}
                 """;
         mockMvc.perform(post("/api/v1/eval/chat")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -190,7 +190,7 @@ class EvalChatControllerTest {
     @Test
     void chatReturnsSnakeCaseAndRequiredFields() throws Exception {
         String body = """
-                {"query":"上海三日游行程规划与预算偏好说明","mode":"AGENT","conversation_id":"c1"}
+                {"query":"贵州茅台基本面分析与估值偏好说明","mode":"AGENT","conversation_id":"c1"}
                 """;
         mockMvc.perform(post("/api/v1/eval/chat")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -351,7 +351,7 @@ class EvalChatControllerTest {
      */
     static Stream<Arguments> metaObservabilityCases() {
         return Stream.of(
-                Arguments.of("{\"query\":\"上海多日游行程规划需求说明\",\"mode\":\"AGENT\"}", 5),
+                Arguments.of("{\"query\":\"贵州茅台多季度财报分析需求说明\",\"mode\":\"AGENT\"}", 5),
                 Arguments.of("{\"query\":\"评测集单行但加长超过六字以走全管线\",\"mode\":\"EVAL\"}", 5),
                 Arguments.of("{\"query\":\"  \"}", 0),
                 Arguments.of("{\"query\":\"\"}", 0)

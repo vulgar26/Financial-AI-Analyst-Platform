@@ -8,7 +8,7 @@ class EvalQuerySafetyPolicyTest {
 
     @Test
     void normalTravelQuery_notBlocked() {
-        assertTrue(EvalQuerySafetyPolicy.evaluate("上海三日游怎么安排").isEmpty());
+        assertTrue(EvalQuerySafetyPolicy.evaluate("贵州茅台财报怎么分析").isEmpty());
     }
 
     @Test

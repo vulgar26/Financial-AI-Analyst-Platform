@@ -80,12 +80,11 @@ import static com.travel.ai.tools.ToolObservability.log;
  * 检索合并阶段使用 {@link RetrieveService}：按文档 id（无 id 时退化为正文 hash）
  * 显式去重，避免依赖 {@link Document#equals} 实现细节（UPGRADE P2-2）。
  */
-// Historical class name retained for compatibility.
-// This implementation backs FinancialAnalystAgent and currently serves the finance analyst workflow.
+// Sole implementation of FinancialAnalystAgent; owns SSE assembly, ChatClient streaming, and Redis memory.
 @Component
-public class TravelAgent implements FinancialAnalystAgent {
+public class FinancialAnalystAgentImpl implements FinancialAnalystAgent {
 
-    private static final Logger log = LoggerFactory.getLogger(TravelAgent.class);
+    private static final Logger log = LoggerFactory.getLogger(FinancialAnalystAgentImpl.class);
 
     /** 固定流水线阶段数：PLAN、RETRIEVE、TOOL、GUARD、WRITE（与 app.agent.max-steps 校验一致）。 */
     private static final int FIXED_PIPELINE_STAGE_COUNT = 5;
@@ -130,7 +129,7 @@ public class TravelAgent implements FinancialAnalystAgent {
     private int sseHeartbeatSeconds;
 
     /**
-     * 检索零命中时策略：{@code clarify}（默认）= 不调 LLM 做开放式行程生成，仅返回澄清文案；
+     * 检索零命中时策略：{@code clarify}（默认）= 不调 LLM 做无证据的开放式作答，仅返回澄清文案；
      * {@code allow_answer} = 仍走 LLM（仅用于对照/调试，易与「无引用强答」冲突）。
      */
     @Value("${app.rag.empty-hits-behavior:clarify}")
@@ -147,7 +146,7 @@ public class TravelAgent implements FinancialAnalystAgent {
             请用清晰的结构化格式回答，方便用户复核证据。
             """;
 
-    public TravelAgent(ChatClient.Builder builder,
+    public FinancialAnalystAgentImpl(ChatClient.Builder builder,
                        RedisChatMemory chatMemory,
                        VectorStore vectorStore,
                        QueryRewriter queryRewriter,

@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
 /**
  * RAG retrieval service for the finance analyst mainline.
  *
- * <p>This service does not mutate TravelAgent turn state, does not emit SSE,
+ * <p>This service does not mutate FinancialAnalystAgentImpl turn state, does not emit SSE,
  * does not write Redis, and does not generate policy events.</p>
  */
 public final class RetrieveService {

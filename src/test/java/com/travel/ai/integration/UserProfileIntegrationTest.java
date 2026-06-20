@@ -1,7 +1,7 @@
 package com.travel.ai.integration;
 
-import com.travel.ai.TravelAiApplication;
-import com.travel.ai.agent.TravelAgent;
+import com.travel.ai.FinanceAgentApplication;
+import com.travel.ai.agent.FinancialAnalystAgent;
 import com.travel.ai.config.RedisChatMemory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,9 +27,9 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@code user_profile} 表与 {@code /travel/profile} HTTP 契约（Testcontainers）。
+ * {@code user_profile} 表与 {@code /analysis/profile} HTTP 契约（Testcontainers）。
  */
-@SpringBootTest(classes = TravelAiApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = FinanceAgentApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
 class UserProfileIntegrationTest {
@@ -47,7 +47,7 @@ class UserProfileIntegrationTest {
             .withExposedPorts(6379);
 
     @MockBean
-    private TravelAgent travelAgent;
+    private FinancialAnalystAgent agent;
 
     @Autowired
     private TestRestTemplate restTemplate;
@@ -76,7 +76,7 @@ class UserProfileIntegrationTest {
         headers.setBearerAuth(token);
 
         ResponseEntity<String> get0 = restTemplate.exchange(
-                "/travel/profile",
+                "/analysis/profile",
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);
@@ -86,7 +86,7 @@ class UserProfileIntegrationTest {
 
         String putBody = "{\"profile\":{\"homeCity\":\"杭州\",\"prefersTrain\":true}}";
         ResponseEntity<String> put = restTemplate.exchange(
-                "/travel/profile",
+                "/analysis/profile",
                 HttpMethod.PUT,
                 new HttpEntity<>(putBody, headers),
                 String.class);
@@ -96,7 +96,7 @@ class UserProfileIntegrationTest {
 
         String patchBody = "{\"profile\":{\"homeCity\":null,\"note\":\"short\"}}";
         ResponseEntity<String> patch = restTemplate.exchange(
-                "/travel/profile",
+                "/analysis/profile",
                 HttpMethod.PATCH,
                 new HttpEntity<>(patchBody, headers),
                 String.class);
@@ -105,14 +105,14 @@ class UserProfileIntegrationTest {
         assertThat(patch.getBody()).doesNotContain("杭州");
 
         ResponseEntity<Void> del = restTemplate.exchange(
-                "/travel/profile",
+                "/analysis/profile",
                 HttpMethod.DELETE,
                 new HttpEntity<>(headers),
                 Void.class);
         assertThat(del.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
 
         ResponseEntity<String> get1 = restTemplate.exchange(
-                "/travel/profile",
+                "/analysis/profile",
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);
@@ -135,7 +135,7 @@ class UserProfileIntegrationTest {
         }
         sb.append("}}");
         ResponseEntity<String> res = restTemplate.exchange(
-                "/travel/profile",
+                "/analysis/profile",
                 HttpMethod.PUT,
                 new HttpEntity<>(sb.toString(), headers),
                 String.class);
@@ -145,7 +145,7 @@ class UserProfileIntegrationTest {
 
     @Test
     void profile_withoutAuth_returns401() {
-        ResponseEntity<String> res = restTemplate.getForEntity("/travel/profile", String.class);
+        ResponseEntity<String> res = restTemplate.getForEntity("/analysis/profile", String.class);
         assertThat(res.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
@@ -159,7 +159,7 @@ class UserProfileIntegrationTest {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(token);
         ResponseEntity<Void> del = restTemplate.exchange(
-                "/travel/profile?clearChatMemory=true&conversationId=" + conv,
+                "/analysis/profile?clearChatMemory=true&conversationId=" + conv,
                 HttpMethod.DELETE,
                 new HttpEntity<>(headers),
                 Void.class);

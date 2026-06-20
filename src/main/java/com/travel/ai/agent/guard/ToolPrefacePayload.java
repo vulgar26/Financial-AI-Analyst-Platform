@@ -1,12 +1,11 @@
 package com.travel.ai.agent.guard;
 
 /**
- * 解析 {@code TravelAgent} 注入的「工具观察」块，判断 BEGIN/END 标记之间是否含有<strong>非空</strong>正文。
+ * 解析 {@code FinancialAnalystAgentImpl} 注入的「工具观察」块，判断 BEGIN/END 标记之间是否含有<strong>非空</strong>正文。
  * <p>
  * 用途：工具失败时仍可能带有 outcome/error 等元数据头，但 payload 为空；此时不应视为「已有工具数据」而放行 LLM 编造实时信息。
  */
-// Parses tool-observation blocks emitted by the finance analyst runtime.
-// The originating implementation is still the legacy-named TravelAgent class.
+// Parses tool-observation blocks emitted by FinancialAnalystAgentImpl.
 public final class ToolPrefacePayload {
 
     private static final String DATA_START = "BEGIN_TOOL_DATA\n";

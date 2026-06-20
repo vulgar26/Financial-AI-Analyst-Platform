@@ -11,7 +11,7 @@ import org.slf4j.LoggerFactory;
 /**
  * PLAN stage business service for proposal, fallback, parse repair, and parse meta assembly.
  *
- * <p>This service does not mutate TravelAgent turn state and does not emit SSE.
+ * <p>This service does not mutate FinancialAnalystAgentImpl turn state and does not emit SSE.
  * Pn2: it now also resolves the physical runtime stage flags from the effective
  * plan JSON, so the orchestrator no longer re-parses the plan a second time.</p>
  */

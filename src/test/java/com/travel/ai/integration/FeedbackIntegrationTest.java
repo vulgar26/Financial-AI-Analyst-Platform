@@ -1,7 +1,7 @@
 package com.travel.ai.integration;
 
-import com.travel.ai.TravelAiApplication;
-import com.travel.ai.agent.TravelAgent;
+import com.travel.ai.FinanceAgentApplication;
+import com.travel.ai.agent.FinancialAnalystAgent;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -27,9 +27,9 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@code user_feedback} 表与 {@code /travel/feedback} HTTP 契约（P1-3 · Testcontainers）。
+ * {@code user_feedback} 表与 {@code /analysis/feedback} HTTP 契约（P1-3 · Testcontainers）。
  */
-@SpringBootTest(classes = TravelAiApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = FinanceAgentApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
 class FeedbackIntegrationTest {
@@ -47,7 +47,7 @@ class FeedbackIntegrationTest {
             .withExposedPorts(6379);
 
     @MockBean
-    private TravelAgent travelAgent;
+    private FinancialAnalystAgent agent;
 
     @Autowired
     private TestRestTemplate restTemplate;
@@ -79,7 +79,7 @@ class FeedbackIntegrationTest {
                 {"thumb":"up","rating":4,"comment":" integration ok ","eval_case_id":"case-it-1","eval_tags":["rag/empty","cost/probe"],"request_id":"req-it-1"}
                 """;
         ResponseEntity<String> post = restTemplate.exchange(
-                "/travel/feedback",
+                "/analysis/feedback",
                 HttpMethod.POST,
                 new HttpEntity<>(postBody, headers),
                 String.class);
@@ -87,7 +87,7 @@ class FeedbackIntegrationTest {
         assertThat(post.getBody()).isNotNull().contains("\"id\"").contains("\"created_at\"");
 
         ResponseEntity<String> list = restTemplate.exchange(
-                "/travel/feedback?limit=10&offset=0",
+                "/analysis/feedback?limit=10&offset=0",
                 HttpMethod.GET,
                 new HttpEntity<>(headers),
                 String.class);
@@ -105,7 +105,7 @@ class FeedbackIntegrationTest {
         headers.setBearerAuth(token);
         String postBody = "{\"thumb\":\"sideways\"}";
         ResponseEntity<String> post = restTemplate.exchange(
-                "/travel/feedback",
+                "/analysis/feedback",
                 HttpMethod.POST,
                 new HttpEntity<>(postBody, headers),
                 String.class);

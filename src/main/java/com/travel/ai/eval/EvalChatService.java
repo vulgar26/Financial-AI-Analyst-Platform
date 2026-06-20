@@ -86,7 +86,7 @@ public class EvalChatService {
     private static final String MARKET_DATA_CONNECTOR = "market_data";
     private static final List<String> EVAL_STAGE_TRACE_ORDER = List.of("PLAN", "RETRIEVE", "TOOL", "GUARD", "WRITE");
 
-    /** 与主线 SSE {@code TravelAgent} 总超时提示对齐的评测归因码。 */
+    /** 与主线 SSE {@code FinancialAnalystAgentImpl} 总超时提示对齐的评测归因码。 */
     public static final String ERROR_CODE_AGENT_TOTAL_TIMEOUT = "AGENT_TOTAL_TIMEOUT";
 
     /** 评测处理过程中线性流水线抛出未预期异常（如检索链路故障），降级为带归因码的 200 而非 500。 */
@@ -507,42 +507,10 @@ public class EvalChatService {
             return complete(response, request, membershipCtx, evidence, planJsonForCheckpoint);
         }
 
-        // P0+ S2：确定性行为策略（tool/clarify），用于收敛典型 BEHAVIOR_MISMATCH。
-        if ("EVAL".equalsIgnoreCase(mode)) {
-            Optional<EvalBehaviorPolicy.Decision> d = EvalBehaviorPolicy.evaluateForEvalMode(request.getQuery());
-            if (d.isPresent()) {
-                EvalBehaviorPolicy.Decision decision = d.get();
-                response.setBehavior(decision.behavior());
-                if (decision.errorCode() != null && !decision.errorCode().isBlank()) {
-                    response.setErrorCode(decision.errorCode());
-                }
-                if (decision.reasons() != null && !decision.reasons().isEmpty()) {
-                    meta.setLowConfidenceReasons(decision.reasons());
-                }
-                appendPolicyEvent(meta, "behavior_policy", PolicyStageAnchor.POST_RETRIEVE.wireValue(), decision.behavior(),
-                        firstPolicyRuleFromReasons(decision.reasons()), decision.errorCode());
-                if ("clarify".equalsIgnoreCase(decision.behavior())) {
-                    meta.setLowConfidence(true);
-                    meta.setStageOrder(List.of("PLAN", "RETRIEVE"));
-                    meta.setStepCount(2);
-                } else if ("tool".equalsIgnoreCase(decision.behavior())) {
-                    // 与默认线性流水线保持一致，避免 eval 对 meta.stage_order 的隐含期望造成 tool_succeeded=false。
-                    meta.setStageOrder(List.of("PLAN", "RETRIEVE", "TOOL", "GUARD", "WRITE"));
-                    meta.setStepCount(5);
-                    EvalChatResultTool toolDto = new EvalChatResultTool();
-                    toolDto.setRequired(true);
-                    toolDto.setUsed(true);
-                    toolDto.setSucceeded(true);
-                    toolDto.setName(EvalToolStageRunner.STUB_TOOL_NAME);
-                    toolDto.setOutcome(EvalToolStageRunner.OUTCOME_OK);
-                    response.setTool(toolDto);
-                    meta.setToolCallsCount(1);
-                    meta.setToolOutcome(EvalToolStageRunner.OUTCOME_OK);
-                }
-                response.setAnswer(decision.answer());
-                return complete(response, request, membershipCtx, evidence, planJsonForCheckpoint);
-            }
-        }
+        // EVAL 模式不再做确定性关键词短路：原 EvalBehaviorPolicy 按 query 字面量（天气/高铁/餐厅等）
+        // 伪造 tool/clarify 结果，甚至伪造 tool used=true/succeeded=true 的工具成功证据，已整体移除。
+        // EVAL 统一走下方业务门控（空命中/低置信 clarify）与真实线性流水线，避免 eval 自证其成。
+
 
         if (!skipDuplicateRetrieveGates) {
             // 业务侧“空命中”兜底门控（不依赖 eval_rag_scenario）；避免在无证据时强答/编造引用。
@@ -1432,7 +1400,7 @@ public class EvalChatService {
     }
 
     /**
-     * 复用 TravelAgent 的检索策略（rewrite → 多路向量召回 → 去重），并映射为对外 {@code retrieval_hits} 与 {@code sources}。
+     * 复用 FinancialAnalystAgentImpl 的检索策略（rewrite → 多路向量召回 → 去重），并映射为对外 {@code retrieval_hits} 与 {@code sources}。
      */
     private Evidence retrieveEvidence(String query, String mode, Integer xEvalMembershipTopN) {
         com.travel.ai.agent.QueryRewriter rewriter = queryRewriter.getIfAvailable();
