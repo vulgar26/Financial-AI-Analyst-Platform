@@ -52,6 +52,9 @@ class RetrieveServiceTest {
         assertThat(captor.getAllValues())
                 .extracting(SearchRequest::getTopK)
                 .containsOnly(2);
+        assertThat(captor.getAllValues())
+                .extracting(SearchRequest::getSimilarityThreshold)
+                .containsOnly(0.5);
         for (SearchRequest searchRequest : captor.getAllValues()) {
             Filter.Expression expression = searchRequest.getFilterExpression();
             assertThat(expression.type()).isEqualTo(Filter.ExpressionType.EQ);
@@ -138,7 +141,7 @@ class RetrieveServiceTest {
     }
 
     private static RetrieveRequest request(String userMessage, String currentUser) {
-        return new RetrieveRequest(userMessage, currentUser, "req-retrieve", 5, 2);
+        return new RetrieveRequest(userMessage, currentUser, "req-retrieve", 5, 2, 0.5);
     }
 
     private static Document doc(String id, String text, String sourceName) {

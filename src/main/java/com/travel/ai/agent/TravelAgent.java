@@ -87,9 +87,6 @@ public class TravelAgent implements FinancialAnalystAgent {
 
     private static final Logger log = LoggerFactory.getLogger(TravelAgent.class);
 
-    /** 合并后进入 prompt 的文档条数上限 */
-    private static final int MAX_CONTEXT_DOCS = 5;
-
     /** 固定流水线阶段数：PLAN、RETRIEVE、TOOL、GUARD、WRITE（与 app.agent.max-steps 校验一致）。 */
     private static final int FIXED_PIPELINE_STAGE_COUNT = 5;
 
@@ -189,8 +186,9 @@ public class TravelAgent implements FinancialAnalystAgent {
                 () -> marketDataToolEnabled,
                 () -> marketDataSummaryMaxChars,
                 () -> emptyHitsBehavior,
-                MAX_CONTEXT_DOCS,
-                2
+                appAgentProperties.getRag().getMaxContextDocs(),
+                appAgentProperties.getRag().getTopKPerQuery(),
+                appAgentProperties.getRag().getSimilarityThreshold()
         );
         this.chatClient = builder
                 .defaultSystem(SYSTEM_PROMPT)

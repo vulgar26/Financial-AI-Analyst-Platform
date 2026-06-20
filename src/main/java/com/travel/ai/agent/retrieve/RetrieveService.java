@@ -39,6 +39,7 @@ public final class RetrieveService {
                 : "anonymous";
         int maxContextDocs = request != null ? request.maxContextDocs() : 0;
         int topKPerQuery = request != null ? request.topKPerQuery() : 0;
+        double similarityThreshold = request != null ? request.similarityThreshold() : 0.0;
 
         long tRewrite0 = System.nanoTime();
         List<String> queries = queryRewriter.rewrite(userMessage);
@@ -56,6 +57,7 @@ public final class RetrieveService {
                         SearchRequest.builder()
                                 .query(query)
                                 .topK(topKPerQuery)
+                                .similarityThreshold(similarityThreshold)
                                 .filterExpression(userFilter)
                                 .build()
                 ).stream())

@@ -179,6 +179,15 @@ app:
     tool-timeout: 3s
     # WRITE 阶段 ChatClient 流式超时（应小于 total-timeout）
     llm-stream-timeout: 20s
+    # RAG 检索调参（原先散落在代码里硬编码，现统一为单一事实源）
+    rag:
+      # 每路改写 query 的向量检索取前 K 条
+      top-k-per-query: 2
+      # 多路结果合并去重后进入 prompt 的文档条数上限
+      max-context-docs: 5
+      # 相似度阈值（余弦，0~1）：低于此值的命中视为不相关、直接丢弃。
+      # Spring AI 默认 0.0（不过滤），是「针对一条问却全库都被检索出来」的病根；这里设 0.5 偏保守。
+      similarity-threshold: 0.5
   agent-task:
     default-max-retries: 0
     worker:

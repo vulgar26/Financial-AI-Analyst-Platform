@@ -1,119 +1,161 @@
-# ARCHITECTURE — 最简链路说明（与代码同步）
+# ARCHITECTURE — 当前真实架构
 
-API naming: `/analysis/**` is the preferred surface for the finance analyst workflow. `/finance/**` is the finance-semantic alias. `/travel/**` is retained as a legacy-compatible endpoint for existing clients and should not be used by new code.
+> 以当前源码和 `application.yml` 为准。历史阶段记录已删，需要时查 git。
+> 命名提示：`TravelAgent`、`com.travel.ai`、`/travel/**` 是 legacy 兼容命名（项目早期是旅行 AI），不是 bug，改名是独立的未来任务。
 
-本项目的核心是 **固定线性编排下的可解释 RAG + SSE**：在 `TravelAgent` 内按阶段推进（见 §1.1），并补齐鉴权、会话隔离、限流、超时、Actuator、SSE 心跳。本文以当前源码和 `application.yml` 为准，历史计划与阶段记录已归档到 `docs/archive/`。
+## 0. API 命名
 
-## 1. 请求链路（文本流程图）
+- `/analysis/**` — 首选接口面。
+- `/finance/**` — 金融语义 alias。
+- `/travel/**` — legacy 兼容端点，新代码勿用。
 
-客户端请求（SSE，经鉴权与限流）  
-→ `AnalysisController`：可选 `POST /analysis/conversations` 登记会话；**推荐** `POST /analysis/chat/{conversationId}` + JSON `query`（路径校验、`max-query-chars`；`app.conversation.require-registration` 时校验 Redis 归属）；`GET …?query=` 仍兼容并带 `Deprecation`。`TravelController` / `/travel/**` 仅作为 legacy-compatible route 保留。  
-→ `TravelAgent.chat(conversationId, userMessage)`（legacy-compatible implementation currently serving the finance analyst workflow）  
-→ **线性阶段**（同一 `requestId` 日志）：`PLAN`（结构化计划 JSON，可配置 LLM）→ `RETRIEVE` → `TOOL` → `GUARD` → `WRITE`；其中 `RETRIEVE`/`TOOL`/`GUARD` 是否**物理执行**由解析后的 plan `steps[*].stage` 决定（`PlanPhysicalStagePolicy`，含 `RETRIEVE` 时隐式 `GUARD`）  
-→ SSE：首段 **`event: plan_parse`**（`data` 为 JSON，字段与评测 `meta.plan_parse_*` / 日志 `[plan]` 对齐）→ `引用片段` 首包 `data` → 正文 `data` → `comment` 心跳
+## 1. 请求链路
 
-**超时（`application.yml` → `app.agent`）**：`total-timeout` 包住整段 SSE 合并流；`llm-stream-timeout` 仅作用于 WRITE 的 `ChatClient` 流；`tool-timeout` 作用于天气 OkHttp；`max-steps` 为配置下限校验（当前固定流水线为 5 步，配置须 ≥5）。
+核心是**固定线性编排下的可解释 RAG + SSE**：
 
-### 1.1 评测路径（对齐主线）
+```
+客户端 (SSE，经鉴权与限流)
+  → AnalysisController
+      · POST /analysis/conversations  可选登记会话
+      · POST /analysis/chat/{conversationId} + JSON query   ← 推荐
+      · GET …?query=  仍兼容，带 Deprecation 头
+  → TravelAgent.chat(conversationId, userMessage)   (legacy 类名，当前金融分析实现)
+  → 线性阶段 (同一 requestId)：
+      PLAN → RETRIEVE → TOOL → GUARD → WRITE
+      其中 RETRIEVE/TOOL/GUARD 是否物理执行，由解析后的 plan steps[*].stage 决定
+      (PlanPhysicalStagePolicy；含 RETRIEVE 时隐式 GUARD)
+  → SSE 输出：
+      event: plan_parse (data 为 plan JSON)
+      → 引用片段首包 data
+      → 正文 data (流式)
+      → comment 心跳
+```
 
-- **评测** `POST /api/v1/eval/chat` 的线性占位管线与 **主线 SSE** 同为 **`PLAN→RETRIEVE→TOOL→GUARD→WRITE`**（`EvalLinearAgentPipeline`；短路路径仍可能只返回子序列，如 `PLAN→GUARD`）。  
-- 响应 **`meta`** 可含 **`recovery_action`** / **`self_check`**（`EvalReflectionSupport` 占位；`app.eval.reflection-meta-enabled` 控制；与 `replan_count=0` 正交）。  
+**超时（`app.agent`）**：`total-timeout` 包住整段 SSE 合并流；`llm-stream-timeout` 仅作用于 WRITE 的 ChatClient 流；`max-steps` 是配置下限校验（当前固定 5 步流水线，配置须 ≥5）。
 
-## 2. 单链路约束（为什么要这样做）
+## 2. 分层与 Workflow Runtime（简历核心，重点理解）
 
-- 每次请求仅保留 **一套** 检索与上下文注入逻辑，避免重复检索导致的成本与延迟不可控。
-- 检索到的文本进入 `promptBase`；计划 JSON 与工具观察块在 `TOOL` 末（或 TOOL 被跳过时等价路径）合并为 `finalPromptForLlm`；若 `app.memory.long-term.enabled` 与 `inject-into-prompt` 为真，则在合并结果前可选附加 **用户画像** 前缀（`UserProfileService`，不打印画像全文）。随后进入 `WRITE`（门控命中时可能跳过 LLM，仅下发澄清）。
-- 若 `app.memory.auto-extract.enabled` 与 `after-chat` 为真，则在整段 SSE `onComplete` 后于 boundedElastic 线程异步调用 `ProfileExtractionCoordinator`（用户名在订阅线程预捕获，异步路径不读 `SecurityContext`）。
-- `DELETE /travel/profile?clearChatMemory=true` 可在删 PG 画像后按前缀清理 `RedisChatMemory`（可选限定 `conversationId`），见 `RedisChatMemory#deleteAllConversationsForUser` / `clearForUser`。
+项目在 Spring AI 之上自建了一个**轻量业务 workflow runtime**。理解四层边界是讲清这个项目的关键：
 
-## 3. 关键可观测点（最小版）
+| 层 | 职责 | 不负责 |
+| --- | --- | --- |
+| **Spring AI** | ChatClient、provider 抽象、streaming、advisor、memory、vector store、tool calling 基础设施 | 业务阶段顺序、PLAN/RETRIEVE/TOOL/GUARD 决策、合规 guard、eval 契约 |
+| **Custom Workflow Runtime** (`com.travel.ai.runtime`) | 阶段编排（`LinearWorkflowRuntime`）、`WorkflowNode`/`NodeResult`、`StageTrace`/`ToolTrace`、`workflow_id`/`workflow_family` | provider SDK、底层 streaming、advisor chain、embedding runtime、Redis、路由、DAG/MQ/Temporal |
+| **TravelAgent** (legacy 类名) | 当前仍承载具体 stage 业务逻辑（stagePlan/Retrieve/Tool/Guard/Write、prompt merge、empty-hit guard、finance guard、SSE 组装），约 530 行 | — |
+| **Eval Runtime** (`/api/v1/eval/chat`) | 非流式评测入口、Eval Contract V1 响应、跨 target 可比性 | 主线 SSE、Redis memory、生产调度 |
 
-一次请求至少记录以下信息（不打印完整隐私内容）：
+### runtime 的定位（重要，别误判为过度设计）
 
-- 检索条数：`docs.size()`
-- 最终 prompt 长度：`TravelAgent` 内在进入 LLM 前记录 `finalPromptForLlm.length()`（门控路径另见日志）
+- runtime 是**有意保留的、通往多 workflow 的种子**，不是过度设计的空壳。它已落地（`LinearWorkflowRuntime` + `PlanStageNode`/`RetrieveStageNode`/`ToolStageNode`/`GuardStageNode` + trace），用 feature flag (`app.agent.workflow-runtime.enabled`) 控制灰度。
+- 当前是 **deterministic workflow orchestration**（阶段固定、顺序明确、节点结果结构化），不是 DAG/multi-agent/MQ。
+- `workflow_id`/`workflow_family` 用于区分 `market_data_explain` 等业务 workflow 与普通聊天，是面向可评测性设计的。
+- `WRITE` / SSE streaming **不纳入 runtime**——这是刻意决策（streaming 归 Spring AI ChatClient，runtime 只管同步阶段调度和 trace）。
+- `MainChatWorkflowAdapter` 已存在，是 TravelAgent 逐步降级为 adapter/facade 路径上的一步。迁移原则：小步、测试覆盖、feature flag 灰度，**不做一次性大拆类或 package rename**。
 
-**性能分段（`TravelAgent`，INFO 级别，前缀 `[perf]`）**：与 MDC 中的 `requestId` 一起便于按请求对齐日志。
+### 为什么不直接用 LangGraph（简历问答素材）
+
+- 生态：项目主体是 Spring Boot 3 + Spring Security + Spring AI + JDBC + Redis + pgvector，Spring 原生链路更直接。
+- 已深度用 Spring AI 的 ChatClient/advisor/memory/vector store/tool，再引入另一个通用 agent framework 会增加运行时边界和调试成本。
+- 业务需要 finance guard、mock 数据披露、tool governance、policy event、citation membership 等可观测语义，需贴近现有后端和 Eval Contract。
+- 当前目标是「轻量业务 workflow runtime」，不是通用 agent framework / DAG runtime / 多 agent 平台。
+- **若未来 Spring AI 官方 agentic/workflow API 成熟，可评估把节点执行接口适配过去**，但不在当前阶段打断主线。
+
+### 不该自己手搓的（已遵守）
+
+LLM SDK、底层 token stream、advisor chain、embedding runtime、provider 差异——全部交给 Spring AI。runtime 的价值只在补齐「业务阶段 + 治理事件 + 评测 trace」。
+
+## 3. 工具治理（Tool Governance）
+
+工具调用经一套治理协议（简历硬货：超时/限流/熔断/归因）。三层结构：
+
+- **协议层 `ToolResult`**：统一工具返回，带 outcome（SUCCESS/TIMEOUT/ERROR/...）。
+- **策略层 `ToolPolicy`**：timeout、rate limit、circuit breaker（熔断）、降级。
+- **观测层 `ToolEvent` / `tool_stage` policy event**：记录每次工具调用结果，供 trace 与 eval 消费。
+
+`outcome → error_code` 映射示例：`TOOL_TIMEOUT`、`TOOL_ERROR`、`TOOL_DISABLED_BY_CIRCUIT_BREAKER`、`RATE_LIMITED`。
+工具输出有**安全预算**：注入防护、截断摘要，防止工具输出污染 prompt。
+
+> 注：早期的 `WeatherTool` 已删除。当前真实工具是 `finance/fundamentals` 下的基本面数据源（见 §6）。
+
+## 4. 关键可观测点
+
+每次请求至少记录（不打印隐私全文）：检索条数 `docs.size()`、最终 prompt 长度。
+
+**性能分段日志（`[perf]`，INFO，配合 MDC `requestId` 对齐）**：
 
 | 字段 | 含义 |
-|------|------|
-| `rewrite_ms` | `QueryRewriter.rewrite` 耗时（毫秒） |
-| `retrieve_ms` | 多路 `similaritySearch` 合并/去重总耗时 |
-| `doc_count` | 进入本轮 prompt 的文档条数 |
-| `llm_first_token_ms` | 流式订阅后首个正文 token 的延迟（TTFT） |
-| `llm_stream_wall_ms` | 从订阅到流结束的 wall 时间（`doFinally` 的 signal） |
+| --- | --- |
+| `rewrite_ms` | QueryRewriter.rewrite 耗时 |
+| `retrieve_ms` | 多路 similaritySearch 合并/去重总耗时 |
+| `doc_count` | 进入 prompt 的文档条数 |
+| `llm_first_token_ms` | 首个正文 token 延迟（TTFT） |
+| `llm_stream_wall_ms` | 订阅到流结束 wall 时间 |
 
-未接入 Micrometer/Prometheus 时，用上述日志即可做本机对比与慢请求粗定位。
+**Trace 串联**：HTTP `X-Request-Id` → SSE `request_id`（plan_parse/stage/policy/done/error）→ `agent_task.request_id` → 异步 worker 日志 / `agent_task_event.event_json`。`RequestTraceFilter` 缺 header 时生成 UUID 并回写响应头。
 
-### 3.1 Request trace and guard policy fields
+**`rag_gate` policy event**：每次 GUARD 执行都发，`attrs` 含 `retrieve_hit_count`、`tool_payload_present`、`empty_hits_behavior`、`skip_llm`、`reason`；`error_code` 保留给真实门控结果如 `RETRIEVE_EMPTY`、`TOOL_NO_USABLE_PAYLOAD`。
 
-- `RequestTraceFilter` reads `X-Request-Id`; if it is missing, the server generates a UUID. The value is written to MDC as `requestId` and echoed in the response header `X-Request-Id`.
-- `TravelAgent` reuses the current MDC `requestId` when present, and still writes the same id explicitly into SSE `request_id` fields. This is important for reactive/SSE paths where thread-local MDC alone is not enough.
-- Trace join path: HTTP `X-Request-Id` -> SSE `request_id` (`plan_parse`, `stage`, `policy`, `done/error`) -> `agent_task.request_id` -> async worker logs and `agent_task_event.event_json`.
-- `rag_gate` policy events are emitted on every GUARD execution. `attrs` include `retrieve_hit_count`, `tool_payload_present`, `empty_hits_behavior`, `skip_llm`, and `reason`. `error_code` remains reserved for actual gate/skip outcomes such as `RETRIEVE_EMPTY` or `TOOL_NO_USABLE_PAYLOAD`.
-
-## 4. 相关源码入口
-
-- 对话 SSE 入口：`src/main/java/com/travel/ai/controller/TravelController.java`
-- 主线编排与 RAG：`src/main/java/com/travel/ai/agent/TravelAgent.java`
-- 查询改写：`src/main/java/com/travel/ai/agent/QueryRewriter.java`
-- 向量存储：`src/main/java/com/travel/ai/config/PgVectorStore.java`（`metadata` JSON；`similaritySearch` 按 `user_id` 过滤）
-- 评测 HTTP：`src/main/java/com/travel/ai/eval/EvalChatController.java`、`EvalChatService.java`
-- 评测网关 Filter：`src/main/java/com/travel/ai/security/EvalGatewayAuthFilter.java`
-- 手工 RAG 回归表：`docs/eval.md`
-
-## 5. 安全与可靠性（Week 2 进展）
+## 5. 安全与可靠性
 
 ### 5.1 鉴权与会话隔离
-
-- 业务接口（主推 `/analysis/**`、金融语义 alias `/finance/**`、legacy-compatible `/travel/**`、`/knowledge/**` 等）通过 `SecurityConfig` 受 Spring Security 保护。
-- **`/api/v1/eval/**`**：路径需 **已认证**；由 `EvalGatewayAuthFilter` 在校验 **`X-Eval-Gateway-Key`** 与 `app.eval.gateway-key`（环境变量 `APP_EVAL_GATEWAY_KEY`）通过后注入 `eval-gateway` 主体（与 JWT 可并存于不同请求）。未配置网关密钥时评测接口 **401**。
-- `POST /auth/login` 使用内存用户（如 `demo/demo123`）与 `JwtService` 签发 JWT，客户端在后续请求中通过 `Authorization: Bearer ...` 访问。
-- `JwtAuthFilter` 在每次请求前解析 JWT，将当前用户写入 `SecurityContext`，`TravelAgent` 与 `KnowledgeServiceImpl` 从中读取用户名，用于：
-  - 写入向量 metadata（`user_id` 字段）；
-  - 读取向量时按 `user_id` 过滤，实现“谁上传谁检索”。
+- 业务接口经 `SecurityConfig` 受 Spring Security 保护。
+- `POST /auth/login` 用内存用户（如 `demo/demo123`）+ `JwtService` 签发 JWT；后续 `Authorization: Bearer ...`。
+- `JwtAuthFilter` 每请求解析 JWT 写入 `SecurityContext`；用户名用于：写向量 metadata 的 `user_id`、读向量时按 `user_id` 过滤，实现「谁上传谁检索」。
+- **`/api/v1/eval/**`**：路径需已认证；`EvalGatewayAuthFilter` 校验 `X-Eval-Gateway-Key` 与 `app.eval.gateway-key`（`APP_EVAL_GATEWAY_KEY`）通过后注入 `eval-gateway` 主体。未配置网关密钥时评测接口 401。
 
 ### 5.2 限流
-
-- `RateLimitingFilter` 是一个全局 `OncePerRequestFilter`，在 `JwtAuthFilter` 之后执行：
-  - 针对 `/analysis/chat/**`、`/finance/chat/**` 和 legacy-compatible `/travel/chat/**` 使用 Bucket4j + Caffeine 为每个用户/IP 创建独立 token bucket。
-  - 默认策略：每用户/IP 每分钟 5 次请求（可配置），超额时立即返回 HTTP 429，Body 与鉴权/REST 同形：`{"error":"RATE_LIMITED","message":"请求过于频繁，请稍后再试"}`（`JsonApiErrorSupport`）
-  - 登录用户用 `user:{username}` 作为限流 key，匿名用户退化为按 IP 限流。
+- `RateLimitingFilter`（全局 OncePerRequestFilter，在 JwtAuthFilter 之后）：对 `/analysis/chat/**`、`/finance/chat/**`、legacy `/travel/chat/**` 用 Bucket4j + Caffeine 为每用户/IP 独立 token bucket。
+- 默认每用户/IP 每分钟 5 次，超额 HTTP 429，Body 同形 `{"error":"RATE_LIMITED",...}`。登录用户 key 为 `user:{username}`，匿名退化为 IP。
 
 ### 5.3 超时与降级
-
-- **LLM 调用**（`TravelAgent.chat`）：
-  - 在 **内容流** `Flux<String>` 上增加 `.timeout(Duration.ofSeconds(20))`，整体超时后通过 `.onErrorResume(...)` 记录错误并返回一条系统提示，再封装为 `ServerSentEvent` 与心跳流合并输出；避免 SSE 永久挂起。
-  - `doFinally` 清理 MDC 中的 `requestId`，保证日志上下文不串号。
-
-- **天气工具**（`WeatherTool`）：
-  - 通过 `application-local.yml` 配置 `weather.timeout-ms` 与 `weather.api-url`，初始化 OkHttpClient 的 connect / read / write / call timeout。
-  - 若未配置 `api-url`，走本地模拟天气文案；若配置了但调用超时或异常，则记录 warn/error 日志并返回“查询超时/暂时不可用”的降级文本。
+- LLM 调用：内容流 `Flux<String>` 上 `.timeout(...)`，超时经 `.onErrorResume(...)` 返回系统提示并与心跳流合并，避免 SSE 永久挂起。`doFinally` 清理 MDC `requestId`。
+- 外部数据源（基本面）：超时/异常时降级（见 §6 `MockFundamentalsDataSource`），不让整轮请求崩。
 
 ### 5.4 日志噪音治理
+- SSE 异步 dispatch 会让 Tomcat 收尾再次触发 Security filter chain。`SecurityConfig` 用 `securityMatcher(req -> req.getDispatcherType() == REQUEST)` 仅对真实 HTTP 请求应用，避免 SSE 收尾的多余 `AccessDeniedException` 日志。
 
-- 由于 SSE 使用异步 dispatch，Tomcat 在 async 收尾阶段会再次触发 Spring Security filter chain。
-- 通过在 `SecurityConfig` 中增加 `securityMatcher(request -> request.getDispatcherType() == REQUEST)`，仅对真正的 HTTP 请求（`DispatcherType.REQUEST`）应用 SecurityFilterChain，避免在 SSE 收尾阶段出现多余的 `AccessDeniedException` 与 “response already committed” 日志。
+### 5.5 Actuator 探活
+- 仅暴露 `health`、`info`；`show-details`/`show-components` 为 `when_authorized`（匿名只得聚合状态，带 JWT 见组件详情）。
+- 开启 liveness/readiness probes，`/actuator/health/liveness`、`/readiness` 匿名 200。`SecurityConfig` 对 `/actuator/health/**`、`/actuator/info` 用 `permitAll()`，便于 LB / K8s 健康检查。
 
-### 5.5 运行探活（Actuator）
+### 5.6 SSE 工程化
+- 返回 `Flux<ServerSentEvent<String>>`，区分业务 `data` 与保活 `comment`。
+- 心跳：`Flux.interval` 按 `app.sse.heartbeat-seconds`（默认 15s）发 comment；正文流经 `.share()` 与心跳 `Flux.merge`，避免重复订阅导致**重复调用 LLM**；正文结束用 `takeUntilOther(...)` 停心跳。
+- 断线：下游取消触发 `doOnCancel` 日志；Tomcat 收尾偶发 IOException 属正常，与业务失败区分。
+- 响应头：`Cache-Control: no-cache, no-store`、`X-Accel-Buffering: no`。
 
-- 依赖：`spring-boot-starter-actuator`。
-- `application.yml` 中 `management.endpoints.web.exposure.include` 仅暴露 `health`、`info`；`management.endpoint.health.show-details` / `show-components` 为 `when_authorized`，匿名调用只得到聚合状态（如 `{"status":"UP"}`），带 JWT 时可看 DB、Redis 等组件详情。
-- 配置了 `livenessstate` / `readinessstate` 用于 `health` 语义判断，并开启了 `management.endpoint.health.probes.enabled`；因此子路径 `/actuator/health/liveness` 与 `/actuator/health/readiness` 返回 `200`（匿名可访问）。
-- `SecurityConfig` 对 `/actuator/health/**` 与 `/actuator/info` 使用 `permitAll()`，负载均衡与 Docker/K8s 健康检查无需携带 Token。
+## 6. 真实基本面数据（第一块砖，已落地）
 
-更细的 Actuator 概念说明见：`ACTUATOR_HEALTH_BASICS.md`。
+包 `com.travel.ai.finance.fundamentals`，把 mock 行情换成真实美股基本面：
 
-### 5.6 SSE 工程化（心跳与断线）
+- `FundamentalsSnapshot` — 结构化领域对象（BigDecimal、全可空、持久化无知，不带 JPA 注解）。
+- `FundamentalsDataSource` 接口 + `FmpFundamentalsDataSource`（FMP **stable** 版 `/profile` + `/ratios-ttm`，RestClient）+ `MockFundamentalsDataSource`（降级）+ `CachingFundamentalsDataSource`（Caffeine 防烧额度）。
+- `FundamentalsTextRenderer`（结构 → LLM 文本）、`FmpProperties` / `FundamentalsConfig`。
+- key 走 `FMP_API_KEY` 环境变量，无 key 自动降级 mock。FMP 免费档 250 次/天，已用真实 key 验证 AAPL 取数与字段映射正确。
 
-- **返回模型**：`TravelController` / `TravelAgent.chat(...)` 使用 **`Flux<ServerSentEvent<String>>`**，而不是裸 `Flux<String>`，以便区分 **业务 `data`** 与 **保活 `comment`**（符合 SSE 文本格式：`data:` 与以 `:` 开头的注释行）。
-- **心跳**：`Flux.interval` 按 `app.sse.heartbeat-seconds`（默认 15s）发送 `ServerSentEvent.comment("keepalive")`；正文流 `contentFlux` 经 **`.share()`** 与心跳合并（`Flux.merge`），避免重复订阅导致 **重复调用 LLM**。正文结束后通过 **`takeUntilOther(contentFlux.then())`** 停止心跳。
-- **断线**：客户端关闭连接时，下游取消订阅会触发 **`doOnCancel`** 日志（`SSE 订阅已取消…`）。Tomcat 在收尾写 Socket 时偶发 **`IOException`（连接被对端中止）** 属于常见现象，与业务失败不同，可在运维上降级或忽略。
-- **响应头**：`TravelController` 设置 `Cache-Control: no-cache, no-store` 与 `X-Accel-Buffering: no`，减轻缓存与反向代理缓冲对流式响应的影响。
+## 7. LLM 供应商
 
-## 6. Docker Compose（Week 3）
+- **chat 主模型 = Anthropic Claude**（经公司中转 `ANTHROPIC_BASE_URL`，token `ANTHROPIC_AUTH_TOKEN`，模型 claude-sonnet-4-5，Anthropic 原生协议，`spring-ai-starter-model-anthropic`）。
+- **embedding = DashScope**（RAG 用；当前无 key 未真跑）。
+- 业务代码供应商中立（Spring AI ChatClient/ChatModel 抽象）。坑：① DashScope + Anthropic 两个 ChatModel bean 冲突 → `application.yml` 用 `spring.autoconfigure.exclude` 排除 DashScope 的 ChatAutoConfiguration（保留其 embedding 自动配置）；② AnthropicApi 构造校验 base-url 非空，test profile 须给占位非空 base-url。**生产必须配 `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`，否则启动崩。**
 
-- 仓库根目录 `docker-compose.yml` 定义 **`app` + `postgres`（`pgvector/pgvector:pg16`）+ `redis`**，同一默认网络内通过服务名互访。
-- **库表结构**：由 **Flyway** 在应用启动时执行 `classpath:db/migration`（当前 **`V1__init_pgvector.sql`**：创建 `vector` 扩展与 **`vector_store`**，列与 `PgVectorStore` 一致）。
-- 环境变量通过 **`.env`**（由 `.env.example` 复制）注入 **`SPRING_DATASOURCE_*`、`SPRING_DATA_REDIS_*`、`APP_JWT_SECRET`、`SPRING_AI_DASHSCOPE_API_KEY`** 等，避免把密钥写进镜像。
-- 宿主机映射 **`8081`**（应用）、**`5433→5432`**（Postgres）、**`16379→6379`**（Redis）。Redis 不使用宿主机 `6379`，避免 Windows Hyper-V 排除端口段导致 Docker bind 失败；compose 内服务仍通过 **`redis:6379`** 访问。
+## 8. 向量存储 / RAG
+
+- 用 **Spring AI 官方 `PgVectorStore`**（已删自研实现）。`vector_store` 表，`embedding vector(1024)`，cosine，HNSW；按 `user_id` 隔离（`metadata::jsonb @@ jsonpath` 过滤）。
+- RAG 编排（QueryRewriter 改写、多路检索合并去重）当前仍自研——这是后续可换 Spring AI 模块化 RAG 的候选（见 ROADMAP）。
+
+## 9. 部署（Docker Compose）
+
+- 根目录 `docker-compose.yml`：`app` + `postgres`（`pgvector/pgvector:pg16`）+ `redis`，同网络服务名互访。
+- 库表由 **Flyway** 启动时执行 `classpath:db/migration`。
+- `.env`（由 `.env.example` 复制）注入 `SPRING_DATASOURCE_*`、`SPRING_DATA_REDIS_*`、`APP_JWT_SECRET`、LLM key 等。
+- 宿主机映射：`8081`（应用）、`5433→5432`（PG）、`16379→6379`（Redis，避开 Windows 排除端口段）；compose 内仍用 `redis:6379`。
+
+## 关键源码入口
+
+- SSE 入口：`controller/TravelController.java`（legacy 名）、`AnalysisController`
+- 主线编排 + RAG：`agent/TravelAgent.java`
+- workflow runtime：`runtime/LinearWorkflowRuntime.java` + `runtime/node/*`
+- 查询改写：`agent/QueryRewriter.java`
+- 基本面数据：`finance/fundamentals/*`
+- 评测：`eval/EvalChatController.java`、`EvalChatService.java`

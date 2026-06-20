@@ -70,6 +70,7 @@ public final class MainChatWorkflowAdapter {
     private final Supplier<String> emptyHitsBehavior;
     private final int maxContextDocs;
     private final int topKPerQuery;
+    private final double similarityThreshold;
 
     public MainChatWorkflowAdapter(AppAgentProperties appAgentProperties,
                                    LinearWorkflowRuntime linearWorkflowRuntime,
@@ -82,7 +83,8 @@ public final class MainChatWorkflowAdapter {
                                    IntSupplier marketDataSummaryMaxChars,
                                    Supplier<String> emptyHitsBehavior,
                                    int maxContextDocs,
-                                   int topKPerQuery) {
+                                   int topKPerQuery,
+                                   double similarityThreshold) {
         this.appAgentProperties = Objects.requireNonNull(appAgentProperties, "appAgentProperties must not be null");
         this.linearWorkflowRuntime = Objects.requireNonNull(linearWorkflowRuntime, "linearWorkflowRuntime must not be null");
         this.planService = Objects.requireNonNull(planService, "planService must not be null");
@@ -95,6 +97,7 @@ public final class MainChatWorkflowAdapter {
         this.emptyHitsBehavior = Objects.requireNonNull(emptyHitsBehavior, "emptyHitsBehavior must not be null");
         this.maxContextDocs = maxContextDocs;
         this.topKPerQuery = topKPerQuery;
+        this.similarityThreshold = similarityThreshold;
     }
 
     public void runPreWriteWorkflow(WorkflowTurnState ctx) {
@@ -257,7 +260,8 @@ public final class MainChatWorkflowAdapter {
                 ctx.currentUser,
                 ctx.requestId,
                 maxContextDocs,
-                topKPerQuery
+                topKPerQuery,
+                similarityThreshold
         ));
         ctx.currentUser = result.currentUser();
         ctx.userFilter = new Filter.Expression(
