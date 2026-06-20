@@ -1,7 +1,7 @@
 package com.travel.ai.integration;
 
-import com.travel.ai.TravelAiApplication;
-import com.travel.ai.agent.TravelAgent;
+import com.travel.ai.FinanceAgentApplication;
+import com.travel.ai.agent.FinancialAnalystAgent;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * {@code user_feedback} 表与 {@code /analysis/feedback} HTTP 契约（P1-3 · Testcontainers）。
  */
-@SpringBootTest(classes = TravelAiApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = FinanceAgentApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
 class FeedbackIntegrationTest {
@@ -47,7 +47,7 @@ class FeedbackIntegrationTest {
             .withExposedPorts(6379);
 
     @MockBean
-    private TravelAgent travelAgent;
+    private FinancialAnalystAgent agent;
 
     @Autowired
     private TestRestTemplate restTemplate;

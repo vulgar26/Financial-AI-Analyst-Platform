@@ -18,7 +18,7 @@ import static com.travel.ai.tools.ToolExecutor.execute;
 /**
  * Governed tool invocation service for the finance analyst mainline.
  *
- * <p>This service does not mutate TravelAgent turn state, does not emit SSE,
+ * <p>This service does not mutate FinancialAnalystAgentImpl turn state, does not emit SSE,
  * does not write Redis, and does not map runtime traces.</p>
  */
 public final class ToolInvocationService {

@@ -1,7 +1,7 @@
 package com.travel.ai.integration;
 
-import com.travel.ai.TravelAiApplication;
-import com.travel.ai.agent.TravelAgent;
+import com.travel.ai.FinanceAgentApplication;
+import com.travel.ai.agent.FinancialAnalystAgent;
 import com.travel.ai.config.AppConversationProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,9 +33,9 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 /**
- * 会话登记与路径校验：{@link TravelAgent} 打桩，避免集成测试依赖外网 LLM。
+ * 会话登记与路径校验：{@link FinancialAnalystAgent} 打桩，避免集成测试依赖外网 LLM。
  */
-@SpringBootTest(classes = TravelAiApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = FinanceAgentApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
 @SuppressWarnings("unchecked")
@@ -54,7 +54,7 @@ class TravelConversationIntegrationTest {
             .withExposedPorts(6379);
 
     @MockBean
-    private TravelAgent travelAgent;
+    private FinancialAnalystAgent agent;
 
     @Autowired
     private TestRestTemplate restTemplate;
@@ -95,7 +95,7 @@ class TravelConversationIntegrationTest {
 
     @Test
     void getChat_invalidConversationId_returns400() {
-        when(travelAgent.chat(anyString(), anyString())).thenReturn(Flux.empty());
+        when(agent.chat(anyString(), anyString())).thenReturn(Flux.empty());
         String token = loginDemo();
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(token);
@@ -109,7 +109,7 @@ class TravelConversationIntegrationTest {
 
     @Test
     void getChat_strictMode_unregistered_returns403() {
-        when(travelAgent.chat(anyString(), anyString())).thenReturn(Flux.empty());
+        when(agent.chat(anyString(), anyString())).thenReturn(Flux.empty());
         boolean prev = appConversationProperties.isRequireRegistration();
         appConversationProperties.setRequireRegistration(true);
         try {
@@ -129,7 +129,7 @@ class TravelConversationIntegrationTest {
 
     @Test
     void getChat_strictMode_registered_reachesAgent() {
-        when(travelAgent.chat(anyString(), anyString())).thenReturn(
+        when(agent.chat(anyString(), anyString())).thenReturn(
                 Flux.just(ServerSentEvent.builder("stub").build()));
         boolean prev = appConversationProperties.isRequireRegistration();
         appConversationProperties.setRequireRegistration(true);
@@ -153,7 +153,7 @@ class TravelConversationIntegrationTest {
 
     @Test
     void postChat_withToken_reachesAgent() {
-        when(travelAgent.chat(anyString(), anyString())).thenReturn(
+        when(agent.chat(anyString(), anyString())).thenReturn(
                 Flux.just(ServerSentEvent.builder("stub").build()));
         String token = loginDemo();
         HttpHeaders headers = new HttpHeaders();

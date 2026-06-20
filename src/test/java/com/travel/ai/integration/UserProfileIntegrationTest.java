@@ -1,7 +1,7 @@
 package com.travel.ai.integration;
 
-import com.travel.ai.TravelAiApplication;
-import com.travel.ai.agent.TravelAgent;
+import com.travel.ai.FinanceAgentApplication;
+import com.travel.ai.agent.FinancialAnalystAgent;
 import com.travel.ai.config.RedisChatMemory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * {@code user_profile} 表与 {@code /analysis/profile} HTTP 契约（Testcontainers）。
  */
-@SpringBootTest(classes = TravelAiApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = FinanceAgentApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
 class UserProfileIntegrationTest {
@@ -47,7 +47,7 @@ class UserProfileIntegrationTest {
             .withExposedPorts(6379);
 
     @MockBean
-    private TravelAgent travelAgent;
+    private FinancialAnalystAgent agent;
 
     @Autowired
     private TestRestTemplate restTemplate;

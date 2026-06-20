@@ -11,7 +11,7 @@ import java.util.List;
 /**
  * P0 线性阶段执行骨架（Day2）：<strong>单一入口</strong> {@link #runStubStages(EvalChatRequest, PlanPhysicalStagePolicy.PhysicalStageFlags, Runnable)}，
  * 在固定顺序 {@code PLAN→RETRIEVE→TOOL→GUARD→WRITE} 下按 {@link PlanPhysicalStagePolicy} <strong>物理跳过</strong>未出现在 plan steps 中的阶段
- * （与主线 {@link com.travel.ai.agent.TravelAgent} 一致）。
+ * （与主线 {@link com.travel.ai.agent.FinancialAnalystAgentImpl} 一致）。
  * <p>
  * <b>如何保证固定顺序（给组长看的概念层说明）</b>：
  * <ul>
@@ -23,7 +23,7 @@ import java.util.List;
 public final class EvalLinearAgentPipeline {
 
     /**
-     * 固定顺序；须与主线 {@link com.travel.ai.agent.TravelAgent} 线性阶段一致。
+     * 固定顺序；须与主线 {@link com.travel.ai.agent.FinancialAnalystAgentImpl} 线性阶段一致。
      */
     private static final StageName[] FIXED_ORDER = {
             StageName.PLAN,

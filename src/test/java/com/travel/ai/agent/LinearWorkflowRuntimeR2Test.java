@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class TravelAgentWorkflowRuntimeR2Test {
+class LinearWorkflowRuntimeR2Test {
 
     @Test
     void featureFlagOff_usesLegacyPath() {

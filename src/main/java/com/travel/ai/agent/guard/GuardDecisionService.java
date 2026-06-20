@@ -10,7 +10,7 @@ import java.util.Locale;
 /**
  * Pure guard decision service for the finance analyst mainline.
  *
- * <p>This service does not mutate TravelAgent turn state and does not emit SSE.
+ * <p>This service does not mutate FinancialAnalystAgentImpl turn state and does not emit SSE.
  * It returns the state values and policy events that the caller should apply.
  */
 public final class GuardDecisionService {

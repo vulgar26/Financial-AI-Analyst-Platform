@@ -52,7 +52,7 @@ import static com.travel.ai.tools.ToolObservability.log;
  * Pre-WRITE workflow runner for the main chat path.
  *
  * <p>M2 intentionally owns only PLAN/RETRIEVE/TOOL/GUARD orchestration. WRITE,
- * SSE assembly, ChatClient streaming, and Redis memory remain in TravelAgent.</p>
+ * SSE assembly, ChatClient streaming, and Redis memory remain in FinancialAnalystAgentImpl.</p>
  */
 public final class MainChatWorkflowAdapter {
 

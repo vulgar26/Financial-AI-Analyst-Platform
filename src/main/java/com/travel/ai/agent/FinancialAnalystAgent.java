@@ -6,7 +6,7 @@ import reactor.core.publisher.Flux;
 /**
  * Domain-neutral entry point for the financial research agent.
  * <p>
- * The current implementation is still backed by the legacy {@link TravelAgent}
+ * The current implementation is still backed by the legacy {@link FinancialAnalystAgentImpl}
  * class to keep existing tests, routes, and frontend behavior compatible.
  */
 public interface FinancialAnalystAgent {

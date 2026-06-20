@@ -1,6 +1,6 @@
 package com.travel.ai.agent.state;
 
-import com.travel.ai.agent.TravelAgent;
+import com.travel.ai.agent.FinancialAnalystAgentImpl;
 import com.travel.ai.agent.guard.RetrieveEmptyHitGate;
 import com.travel.ai.agent.plan.PlanService;
 import com.travel.ai.runtime.PolicyEvent;
@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * Mutable state for one mainline agent turn.
  *
  * <p>This class is intentionally field-based in W1 to preserve the previous
- * {@code TravelAgent.MainAgentTurnContext} access pattern and avoid behavioral
+ * {@code FinancialAnalystAgentImpl.MainAgentTurnContext} access pattern and avoid behavioral
  * changes while the monolithic agent adapter is being split.</p>
  */
 public final class WorkflowTurnState {
@@ -31,9 +31,9 @@ public final class WorkflowTurnState {
     public final String userMessage;
     public final String requestId;
 
-    /** 主线 SSE 可观测：阶段事件（A 粒度）。在 TravelAgent stage execution 期间顺序追加，chat() 再一次性拼进 Flux。 */
+    /** 主线 SSE 可观测：阶段事件（A 粒度）。在 FinancialAnalystAgentImpl stage execution 期间顺序追加，chat() 再一次性拼进 Flux。 */
     public final List<StageEvent> stageEvents = new ArrayList<>();
-    /** 阶段耗时（毫秒），由 TravelAgent stage boundary logging 写入。 */
+    /** 阶段耗时（毫秒），由 FinancialAnalystAgentImpl stage boundary logging 写入。 */
     public final Map<StageName, Long> stageElapsedMs = new LinkedHashMap<>();
     /** 主线 SSE 可观测：策略/决策事件（与 eval meta.policy_events 同语义）。 */
     public final List<PolicyEvent> policyEvents = new ArrayList<>();
@@ -43,7 +43,7 @@ public final class WorkflowTurnState {
     public boolean workflowRuntimePath;
     /**
      * WRITE 子流：LLM {@code .timeout(llm_stream)} 或其它异常经 onErrorResume 降级为占位文本时，
-     * 写入对应 {@code error_code}，供 {@link TravelAgent#chat} 注入 {@code event:error}。
+     * 写入对应 {@code error_code}，供 {@link FinancialAnalystAgentImpl#chat} 注入 {@code event:error}。
      */
     public final AtomicReference<String> llmStreamErrorCode = new AtomicReference<>();
 
