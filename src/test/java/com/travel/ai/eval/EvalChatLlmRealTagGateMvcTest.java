@@ -72,7 +72,7 @@ class EvalChatLlmRealTagGateMvcTest {
     @Test
     void llmModeReal_withoutEvalTags_skipsProbe_setsTagGateNoTags() throws Exception {
         String body = """
-                {"query":"上海三日游行程规划与预算偏好说明","mode":"AGENT","llm_mode":"real"}
+                {"query":"贵州茅台基本面分析与估值偏好说明","mode":"AGENT","llm_mode":"real"}
                 """;
         mockMvc.perform(post("/api/v1/eval/chat")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -87,7 +87,7 @@ class EvalChatLlmRealTagGateMvcTest {
     @Test
     void llmModeReal_withNonMatchingEvalTags_skipsProbe_setsTagGateNoMatch() throws Exception {
         String body = """
-                {"query":"上海三日游行程规划与预算偏好说明","mode":"AGENT","llm_mode":"real","eval_tags":["p0/smoke"]}
+                {"query":"贵州茅台基本面分析与估值偏好说明","mode":"AGENT","llm_mode":"real","eval_tags":["p0/smoke"]}
                 """;
         mockMvc.perform(post("/api/v1/eval/chat")
                         .contentType(MediaType.APPLICATION_JSON)

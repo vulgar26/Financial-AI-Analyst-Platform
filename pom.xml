@@ -11,7 +11,7 @@
     </parent>
 
     <groupId>com.travel.ai</groupId>
-    <artifactId>travel-ai-planner</artifactId>
+    <artifactId>finance-agent</artifactId>
     <version>1.0-SNAPSHOT</version>
 
     <properties>

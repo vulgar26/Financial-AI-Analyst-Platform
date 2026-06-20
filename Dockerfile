@@ -12,7 +12,7 @@
 #
 # 方案 B：默认已使用 DaoCloud 对 Docker Hub 的代理路径（见下方 ARG 默认值）。
 #   若你在海外网络或代理失效，可改回官方 Hub：
-#   docker build -t travel-ai-planner:local `
+#   docker build -t finance-agent:local `
 #     --build-arg MAVEN_IMAGE=maven:3.9-eclipse-temurin-21 `
 #     --build-arg JRE_IMAGE=eclipse-temurin:21-jre-jammy .
 # =============================================================================
@@ -35,7 +35,7 @@ WORKDIR /app
 
 RUN groupadd --system spring && useradd --system --gid spring --no-create-home spring
 
-COPY --from=build /app/target/travel-ai-planner-1.0-SNAPSHOT.jar app.jar
+COPY --from=build /app/target/finance-agent-1.0-SNAPSHOT.jar app.jar
 RUN chown spring:spring app.jar
 
 USER spring:spring
@@ -48,9 +48,9 @@ ENTRYPOINT ["sh", "-c", "exec java $JAVA_TOOL_OPTIONS -jar /app/app.jar"]
 
 # -----------------------------------------------------------------------------
 # 验收（Day1）
-#   docker build -t travel-ai-planner:local .
+#   docker build -t finance-agent:local .
 #   若仍报 auth.docker.io / 超时，使用文件头「方案 A」或「方案 B」
 # -----------------------------------------------------------------------------
 # 运行示例（需本机或 Compose 提供 Postgres/Redis；仅示例）：
-#   docker run --rm -p 8081:8081 -e SPRING_DATASOURCE_URL=... -e APP_JWT_SECRET=... travel-ai-planner:local
+#   docker run --rm -p 8081:8081 -e SPRING_DATASOURCE_URL=... -e APP_JWT_SECRET=... finance-agent:local
 # -----------------------------------------------------------------------------

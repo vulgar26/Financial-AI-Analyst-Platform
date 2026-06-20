@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: travel-ai-planner
+    name: finance-agent
   # 本机存在 application-local.yml 时自动合并（.gitignore；无文件则跳过，不影响 CI）
   config:
     import: optional:classpath:application-local.yml
@@ -106,20 +106,20 @@ app:
       max-value-chars: 512
       max-inject-chars: 1200
     auto-extract:
-      # 为 true 时才允许 LLM 抽取（手动 POST /travel/profile/extract-suggestion 与 after-chat 钩子）
+      # 为 true 时才允许 LLM 抽取（手动 POST /analysis/profile/extract-suggestion 与 after-chat 钩子）
       enabled: false
       # SSE 整轮正常结束后异步抽取（仍受 enabled 约束）
       after-chat: false
-      # true：仅写 Redis 待确认，须 POST /travel/profile/confirm-extraction；false：after-chat 下直接 upsert 画像（慎用）
+      # true：仅写 Redis 待确认，须 POST /analysis/profile/confirm-extraction；false：after-chat 下直接 upsert 画像（慎用）
       require-confirm: true
       pending-ttl: 1h
       llm-timeout-seconds: 12
   conversation:
-    # true：仅允许已通过 POST /travel/conversations 登记到当前用户的 conversationId 访问 GET /travel/chat/{id}（生产推荐）
+    # true：仅允许已通过 POST /analysis/conversations 登记到当前用户的 conversationId 访问 GET /analysis/chat/{id}（生产推荐）
     require-registration: false
     # 聊天 query 最大字符数（GET 查询参数与 POST JSON body 共用上限）
     max-query-chars: 8192
-  # P1-3：POST /travel/feedback 长评截断与列表分页上限
+  # P1-3：POST /analysis/feedback 长评截断与列表分页上限
   feedback:
     max-comment-chars: 2000
     max-page-size: 100
@@ -145,7 +145,7 @@ app:
     rewrite:
       # QueryRewriter 单行最大长度，防止异常输出撑爆 embedding 请求
       max-line-length: 256
-    # 向量检索零命中时主线行为（对齐 travel-ai-upgrade P0 默认）：clarify=不调 LLM 编造行程，仅返回澄清话术
+    # 向量检索零命中时主线行为（对齐 travel-ai-upgrade P0 默认）：clarify=不调 LLM 编造行情/数字，仅返回澄清话术
     empty-hits-behavior: clarify
   eval:
     # 评测 HTTP 网关密钥：请求头 X-Eval-Gateway-Key 须与本值一致（与 X-Eval-Token 分离；后者仍用于 membership HMAC）

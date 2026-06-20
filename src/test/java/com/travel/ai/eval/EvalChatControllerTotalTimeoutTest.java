@@ -71,7 +71,7 @@ class EvalChatControllerTotalTimeoutTest {
     @Test
     void whenStubWorkExceedsTotalTimeout_returnsAgentTotalTimeout() throws Exception {
         String body = """
-                {"query":"上海三日游行程规划与预算偏好说明加长","mode":"AGENT","conversation_id":"c1"}
+                {"query":"贵州茅台基本面分析与估值偏好说明加长","mode":"AGENT","conversation_id":"c1"}
                 """;
         mockMvc.perform(post("/api/v1/eval/chat")
                         .contentType(MediaType.APPLICATION_JSON)

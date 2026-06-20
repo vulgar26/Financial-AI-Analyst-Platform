@@ -18,7 +18,7 @@
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/pgvector/pgvector:pg16}
-    container_name: travel-postgres
+    container_name: finance-postgres
     environment:
       POSTGRES_DB: finance
       POSTGRES_USER: postgres
@@ -36,7 +36,7 @@ services:
 
   redis:
     image: ${REDIS_IMAGE:-docker.m.daocloud.io/library/redis:7-alpine}
-    container_name: travel-redis
+    container_name: finance-redis
     ports:
       - "16379:6379"
     healthcheck:
@@ -49,8 +49,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: travel-ai-planner:local
-    container_name: travel-app
+    image: finance-agent:local
+    container_name: finance-app
     ports:
       - "8081:8081"
     depends_on:

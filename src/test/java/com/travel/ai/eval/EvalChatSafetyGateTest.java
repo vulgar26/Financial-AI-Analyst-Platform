@@ -41,7 +41,7 @@ class EvalChatSafetyGateTest {
 
     @Test
     void normalTravelQuery_shouldNotTriggerGate() {
-        assertTrue(EvalChatSafetyGate.evaluate("上海三日游怎么安排").isEmpty());
+        assertTrue(EvalChatSafetyGate.evaluate("贵州茅台财报怎么分析").isEmpty());
         assertTrue(EvalChatSafetyGate.evaluate("我想去成都吃美食，三天两晚怎么规划？").isEmpty());
     }
 }
