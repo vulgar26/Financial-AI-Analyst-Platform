@@ -150,6 +150,94 @@ class LinearWorkflowRuntimeTest {
         assertThat(ctx.getStageTraces().get(0).attrs()).containsEntry("request_id", "req-123");
     }
 
+    @Test
+    void runtime_redirectsBackToEarlierNodeOnce() {
+        List<String> calls = new ArrayList<>();
+        // GUARD redirects back to RETRIEVE on its first pass, then proceeds on the second pass.
+        WorkflowNode guard = new WorkflowNode() {
+            int passes = 0;
+
+            @Override
+            public String name() {
+                return "GUARD";
+            }
+
+            @Override
+            public NodeResult execute(WorkflowContext ctx) {
+                calls.add("GUARD");
+                passes++;
+                if (passes == 1) {
+                    return NodeResult.redirectTo("RETRIEVE", Map.of("replan", "true"));
+                }
+                return NodeResult.success();
+            }
+        };
+
+        WorkflowContext ctx = runtime.run(task(), List.of(
+                node("PLAN", calls, NodeResult.success()),
+                node("RETRIEVE", calls, NodeResult.success()),
+                guard
+        ));
+
+        // RETRIEVE runs twice (initial + replan), GUARD runs twice, PLAN once.
+        assertThat(calls).containsExactly("PLAN", "RETRIEVE", "GUARD", "RETRIEVE", "GUARD");
+        assertThat(ctx.getAttrs()).doesNotContainKey("redirect_capped");
+    }
+
+    @Test
+    void runtime_capsInfiniteRedirectLoop() {
+        List<String> calls = new ArrayList<>();
+        // A GUARD that always redirects would loop forever without the engine cap.
+        WorkflowNode alwaysRedirect = new WorkflowNode() {
+            @Override
+            public String name() {
+                return "GUARD";
+            }
+
+            @Override
+            public NodeResult execute(WorkflowContext ctx) {
+                calls.add("GUARD");
+                return NodeResult.redirectTo("RETRIEVE", Map.of());
+            }
+        };
+
+        LinearWorkflowRuntime cappedRuntime = new LinearWorkflowRuntime(2);
+        WorkflowContext ctx = cappedRuntime.run(task(), List.of(
+                node("RETRIEVE", calls, NodeResult.success()),
+                alwaysRedirect
+        ));
+
+        // 2 redirects allowed: GUARD runs 3 times (initial + 2 replans), then cap forces advance.
+        assertThat(calls).containsExactly("RETRIEVE", "GUARD", "RETRIEVE", "GUARD", "RETRIEVE", "GUARD");
+        assertThat(ctx.getAttrs()).containsEntry("redirect_capped", "true");
+    }
+
+    @Test
+    void runtime_advancesWhenRedirectTargetUnknown() {
+        List<String> calls = new ArrayList<>();
+        WorkflowNode redirectToMissing = new WorkflowNode() {
+            @Override
+            public String name() {
+                return "GUARD";
+            }
+
+            @Override
+            public NodeResult execute(WorkflowContext ctx) {
+                calls.add("GUARD");
+                return NodeResult.redirectTo("NONEXISTENT", Map.of());
+            }
+        };
+
+        WorkflowContext ctx = runtime.run(task(), List.of(
+                node("RETRIEVE", calls, NodeResult.success()),
+                redirectToMissing
+        ));
+
+        // Unknown target cannot be honored: GUARD runs once, workflow terminates without looping.
+        assertThat(calls).containsExactly("RETRIEVE", "GUARD");
+        assertThat(ctx.getAttrs()).containsEntry("redirect_unresolved", "NONEXISTENT");
+    }
+
     private static WorkflowTask task() {
         return WorkflowTask.of(
                 "test_workflow",

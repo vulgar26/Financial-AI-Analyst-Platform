@@ -70,6 +70,21 @@ public final class WorkflowTurnState {
     public int planParseAttempts;
     public String planParseResolved;
 
+    /**
+     * 本轮检索 replan 次数（图编排回边）。GUARD 检测到「假零命中」(纯零命中、无工具数据)
+     * 时跳回 RETRIEVE 用更低相似度阈值再探一次。业务语义上限为 1：探一次足以判别
+     * 「真没有」还是「被阈值拦掉」，多探属于「为了查到而查」，是制造另一种说谎的绿。
+     * 引擎侧另有 maxRedirects 作为机械安全兜底，两层职责不同。
+     */
+    public int retrievalReplanCount;
+
+    /**
+     * 第二刀：本轮 GUARD 的语义相关性裁判判定「检索到了但不相关」，已请求回边「换个问法重检」。
+     * stageRetrieve 读它给 query 改写加提示前缀；与 {@link #retrievalReplanCount} 共用上界
+     * （无论「没捞到」还是「捞错了」，都只给一次重探机会）。重检后清零，避免影响后续判断。
+     */
+    public boolean relevanceReplanRequested;
+
     /** 检索零命中且策略为 clarify 时跳过 LLM，仅下发固定澄清。 */
     public boolean skipLlmForEmptyHits;
     public String emptyHitsClarifyBody;

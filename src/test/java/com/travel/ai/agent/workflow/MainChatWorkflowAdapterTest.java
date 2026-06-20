@@ -5,6 +5,7 @@ import com.travel.ai.agent.MarketDataTool;
 import com.travel.ai.finance.fundamentals.MockFundamentalsDataSource;
 import com.travel.ai.agent.QueryRewriter;
 import com.travel.ai.agent.guard.GuardDecisionService;
+import com.travel.ai.agent.guard.RetrievalRelevanceJudge;
 import com.travel.ai.agent.plan.MainLinePlanProposer;
 import com.travel.ai.agent.plan.PlanService;
 import com.travel.ai.agent.prompt.PromptAssemblyService;
@@ -189,6 +190,141 @@ class MainChatWorkflowAdapterTest {
         assertThat(ctx.finalPromptForLlm).doesNotContain("BEGIN_TOOL_DATA");
     }
 
+    @Test
+    void flagOn_replanRetriesRetrieveOnceWithLoweredThresholdWhenFirstPassEmpty() {
+        WorkflowTurnState ctx = state("obscure question");
+        // 高阈值(0.5)首检索零命中、降级阈值(0.35)命中：证明 GUARD→RETRIEVE 回边发生且重查放宽了阈值。
+        MainChatWorkflowAdapter adapter = thresholdAwareAdapter(planJson(true, false, true), 0.5);
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        // RETRIEVE 跑了两遍（首检索 + replan 重查），回边后 TOOL→GUARD 整段重跑。
+        assertThat(ctx.stageEvents)
+                .extracting(e -> e.stage().name() + ":" + e.kind().name())
+                .containsExactly(
+                        "PLAN:START", "PLAN:END",
+                        "RETRIEVE:START", "RETRIEVE:END",
+                        "TOOL:SKIP",
+                        "GUARD:START", "GUARD:END",
+                        "RETRIEVE:START", "RETRIEVE:END",
+                        "TOOL:SKIP",
+                        "GUARD:START", "GUARD:END"
+                );
+        assertThat(ctx.retrievalReplanCount).isEqualTo(1);
+        // 重查命中，最终不该落空澄清。
+        assertThat(ctx.skipLlmForEmptyHits).isFalse();
+        assertThat(ctx.docs).isNotEmpty();
+    }
+
+    @Test
+    void flagOn_replanFiresAtMostOnceThenFallsBackToClarifyWhenStillEmpty() {
+        WorkflowTurnState ctx = state("truly absent topic");
+        // 任何阈值都零命中(emptyAtOrAbove=0.0)：replan 探一次后仍空，必须停在 1 次、回边不得无限循环，最终落澄清。
+        MainChatWorkflowAdapter adapter = thresholdAwareAdapter(planJson(true, false, true), 0.0);
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        long retrieveStarts = ctx.stageEvents.stream()
+                .filter(e -> e.stage() == StageName.RETRIEVE && e.kind() == StageEventKind.START)
+                .count();
+        assertThat(retrieveStarts).isEqualTo(2); // 首检索 + 恰好一次重查
+        assertThat(ctx.retrievalReplanCount).isEqualTo(1);
+        // 重查仍空：第二轮 GUARD 落地澄清，不再 replan。
+        assertThat(ctx.skipLlmForEmptyHits).isTrue();
+        assertThat(ctx.docs).isEmpty();
+    }
+
+    // ---------- 第二刀：语义相关性裁判触发回边「换问法重检」 ----------
+
+    @Test
+    void flagOn_relevanceJudgeNotRelevantTriggersRewriteReplanOnce() {
+        WorkflowTurnState ctx = state("贵州茅台三季度毛利率");
+        // emptyAtOrAbove=999：任何阈值都命中(docs 永远非空)，把判别权交给相关性裁判。
+        // 裁判判 not-relevant → 应回边「换问法」重检一次。
+        RetrievalRelevanceJudge notRelevant =
+                (q, docs) -> RetrievalRelevanceJudge.Verdict.notRelevant("片段是旅游攻略，与财报无关");
+        MainChatWorkflowAdapter adapter = thresholdAwareAdapter(planJson(true, false, true), 999.0, notRelevant);
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        // RETRIEVE 跑两遍（首检索 + 相关性 replan 重检），回边后 TOOL→GUARD 整段重跑。
+        assertThat(ctx.stageEvents)
+                .extracting(e -> e.stage().name() + ":" + e.kind().name())
+                .containsExactly(
+                        "PLAN:START", "PLAN:END",
+                        "RETRIEVE:START", "RETRIEVE:END",
+                        "TOOL:SKIP",
+                        "GUARD:START", "GUARD:END",
+                        "RETRIEVE:START", "RETRIEVE:END",
+                        "TOOL:SKIP",
+                        "GUARD:START", "GUARD:END"
+                );
+        assertThat(ctx.retrievalReplanCount).isEqualTo(1);
+        // 一次性提示前缀已被消费，避免污染后续判断。
+        assertThat(ctx.relevanceReplanRequested).isFalse();
+        // 重检命中、未落空澄清。
+        assertThat(ctx.skipLlmForEmptyHits).isFalse();
+        assertThat(ctx.docs).isNotEmpty();
+    }
+
+    @Test
+    void flagOn_relevanceJudgeUnavailableDoesNotReplan_failSafePassThrough() {
+        WorkflowTurnState ctx = state("贵州茅台三季度毛利率");
+        // 裁判 LLM 不可用(available=false)：fail-safe 放行，绝不触发 replan
+        // ——否则一次网络抖动就能让正常请求空转重查，把外部不稳定变成功能 bug。
+        RetrievalRelevanceJudge unavailable =
+                (q, docs) -> RetrievalRelevanceJudge.Verdict.passThrough();
+        MainChatWorkflowAdapter adapter = thresholdAwareAdapter(planJson(true, false, true), 999.0, unavailable);
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        assertThat(ctx.stageEvents)
+                .extracting(e -> e.stage().name() + ":" + e.kind().name())
+                .containsExactly(
+                        "PLAN:START", "PLAN:END",
+                        "RETRIEVE:START", "RETRIEVE:END",
+                        "TOOL:SKIP",
+                        "GUARD:START", "GUARD:END"
+                );
+        assertThat(ctx.retrievalReplanCount).isEqualTo(0);
+        assertThat(ctx.relevanceReplanRequested).isFalse();
+    }
+
+    @Test
+    void flagOn_relevanceJudgeRelevantPassesThroughWithoutReplan() {
+        WorkflowTurnState ctx = state("贵州茅台三季度毛利率");
+        RetrievalRelevanceJudge relevant =
+                (q, docs) -> RetrievalRelevanceJudge.Verdict.relevant("片段含相关财报事实");
+        MainChatWorkflowAdapter adapter = thresholdAwareAdapter(planJson(true, false, true), 999.0, relevant);
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        long retrieveStarts = ctx.stageEvents.stream()
+                .filter(e -> e.stage() == StageName.RETRIEVE && e.kind() == StageEventKind.START)
+                .count();
+        assertThat(retrieveStarts).isEqualTo(1); // 相关 → 不回边
+        assertThat(ctx.retrievalReplanCount).isEqualTo(0);
+    }
+
+    @Test
+    void flagOff_inlinePathNeverConsultsRelevanceJudge() {
+        WorkflowTurnState ctx = state("贵州茅台三季度毛利率");
+        // inline 直线基线无回边可承接 redirect：即便裁判判 not-relevant 也不该回边（能力开关语义），
+        // 且为省一次 LLM 调用，inline 路径根本不咨询裁判。
+        java.util.concurrent.atomic.AtomicInteger judgeCalls = new java.util.concurrent.atomic.AtomicInteger();
+        RetrievalRelevanceJudge spy = (q, docs) -> {
+            judgeCalls.incrementAndGet();
+            return RetrievalRelevanceJudge.Verdict.notRelevant("would-replan-if-runtime");
+        };
+        // runtimeEnabled=false → inline 路径。
+        MainChatWorkflowAdapter adapter = inlineAdapterWithJudge(planJson(true, false, true), spy);
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        assertThat(judgeCalls.get()).isZero();
+        assertThat(ctx.retrievalReplanCount).isEqualTo(0);
+    }
+
     private static MainChatWorkflowAdapter adapter(boolean runtimeEnabled, String planJson, PlanParser policyParser) {
         AppAgentProperties properties = new AppAgentProperties();
         properties.getWorkflowRuntime().setEnabled(runtimeEnabled);
@@ -221,6 +357,7 @@ class MainChatWorkflowAdapterTest {
                 retrieveService,
                 toolInvocationService,
                 new GuardDecisionService(),
+                (q, docs) -> RetrievalRelevanceJudge.Verdict.relevant("stub-default-relevant"),
                 new PromptAssemblyService(null),
                 () -> true,
                 () -> 600,
@@ -233,6 +370,114 @@ class MainChatWorkflowAdapterTest {
 
     private static PlanParser realPlanParser() {
         return new PlanParser(new ObjectMapper());
+    }
+
+    /**
+     * inline 路径(runtime disabled) + 自定义裁判：用于验证 inline 永远不咨询裁判、不回边。
+     */
+    private static MainChatWorkflowAdapter inlineAdapterWithJudge(String planJson, RetrievalRelevanceJudge relevanceJudge) {
+        AppAgentProperties properties = new AppAgentProperties();
+        properties.getWorkflowRuntime().setEnabled(false);
+
+        PlanParser policyParser = realPlanParser();
+        MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
+        when(proposer.proposePlanJson(any(), any())).thenReturn(planJson);
+        PlanService planService = new PlanService(
+                proposer,
+                new PlanParseCoordinator(policyParser, hint -> planJson),
+                policyParser
+        );
+
+        QueryRewriter queryRewriter = mock(QueryRewriter.class);
+        when(queryRewriter.rewrite(any())).thenReturn(List.of("query-1"));
+        VectorStore vectorStore = mock(VectorStore.class);
+        when(vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(new Document("doc-1", "research hit", Map.of("source_name", "unit"))));
+        RetrieveService retrieveService = new RetrieveService(queryRewriter, vectorStore);
+
+        ToolInvocationService toolInvocationService = new ToolInvocationService(
+                new MarketDataTool(new MockFundamentalsDataSource()),
+                null,
+                null
+        );
+
+        return new MainChatWorkflowAdapter(
+                properties,
+                new LinearWorkflowRuntime(),
+                planService,
+                retrieveService,
+                toolInvocationService,
+                new GuardDecisionService(),
+                relevanceJudge,
+                new PromptAssemblyService(null),
+                () -> true,
+                () -> 600,
+                () -> "clarify",
+                5,
+                2,
+                0.5
+        );
+    }
+    /**
+     * Replan 专用：VectorStore 命中与否取决于 SearchRequest 的 similarityThreshold。
+     * 阈值 &gt;= {@code emptyAtOrAbove} 时返回空（模拟过严拦掉相关片段=假零命中），
+     * 低于它时返回命中（模拟降级阈值后召回成功）。把 emptyAtOrAbove 设成超大值即可模拟「真缺失」。
+     */
+    private static MainChatWorkflowAdapter thresholdAwareAdapter(String planJson, double emptyAtOrAbove) {
+        return thresholdAwareAdapter(planJson, emptyAtOrAbove,
+                (q, docs) -> RetrievalRelevanceJudge.Verdict.relevant("stub-default-relevant"));
+    }
+
+    private static MainChatWorkflowAdapter thresholdAwareAdapter(String planJson, double emptyAtOrAbove,
+                                                                 RetrievalRelevanceJudge relevanceJudge) {
+        AppAgentProperties properties = new AppAgentProperties();
+        properties.getWorkflowRuntime().setEnabled(true);
+        properties.getRag().setSimilarityThreshold(0.5);
+        properties.getRag().setReplanSimilarityThreshold(0.35);
+
+        PlanParser policyParser = realPlanParser();
+        MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
+        when(proposer.proposePlanJson(any(), any())).thenReturn(planJson);
+        PlanService planService = new PlanService(
+                proposer,
+                new PlanParseCoordinator(policyParser, hint -> planJson),
+                policyParser
+        );
+
+        QueryRewriter queryRewriter = mock(QueryRewriter.class);
+        when(queryRewriter.rewrite(any())).thenReturn(List.of("query-1"));
+        VectorStore vectorStore = mock(VectorStore.class);
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenAnswer(invocation -> {
+            SearchRequest req = invocation.getArgument(0);
+            if (req.getSimilarityThreshold() >= emptyAtOrAbove) {
+                return List.of();
+            }
+            return List.of(new Document("doc-1", "research hit", Map.of("source_name", "unit")));
+        });
+        RetrieveService retrieveService = new RetrieveService(queryRewriter, vectorStore);
+
+        ToolInvocationService toolInvocationService = new ToolInvocationService(
+                new MarketDataTool(new MockFundamentalsDataSource()),
+                null,
+                null
+        );
+
+        return new MainChatWorkflowAdapter(
+                properties,
+                new LinearWorkflowRuntime(),
+                planService,
+                retrieveService,
+                toolInvocationService,
+                new GuardDecisionService(),
+                relevanceJudge,
+                new PromptAssemblyService(null),
+                () -> true,
+                () -> 600,
+                () -> "clarify",
+                5,
+                2,
+                0.5
+        );
     }
 
     private static WorkflowTurnState state(String userMessage) {

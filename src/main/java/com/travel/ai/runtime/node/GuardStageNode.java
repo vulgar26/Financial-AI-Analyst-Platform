@@ -36,8 +36,10 @@ public final class GuardStageNode implements WorkflowNode {
             }
             return NodeResult.skipped(SKIPPED_BY_PLAN, Map.of("reason", SKIPPED_BY_PLAN));
         }
-        if (delegate != null) {
-            delegate.stageGuard();
+        boolean redirectRequested = delegate != null && delegate.stageGuard();
+        if (redirectRequested) {
+            return NodeResult.redirectTo(StageName.RETRIEVE.name(),
+                    Map.of("replan", "true", "replan_reason", "RAG_EMPTY"));
         }
         return NodeResult.success();
     }
@@ -47,7 +49,13 @@ public final class GuardStageNode implements WorkflowNode {
     }
 
     public interface GuardStageDelegate {
-        void stageGuard();
+        /**
+         * 执行 GUARD 业务判断。
+         *
+         * @return {@code true} 表示检测到「假零命中」、建议跳回 RETRIEVE 重查（replan）；
+         *         {@code false} 表示正常前进。老的 inline 路径直接忽略返回值即天然无 replan。
+         */
+        boolean stageGuard();
 
         void onGuardSkippedByPlan();
     }
