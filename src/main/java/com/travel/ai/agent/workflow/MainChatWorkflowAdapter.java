@@ -297,7 +297,13 @@ public final class MainChatWorkflowAdapter {
             ctx.emptyHitsClarifyBody = analysis.clarifyBody();
         }
 
-        // ⑥ 子图失败照旧抛（与 runtime 路径一致语义）。
+        // ⑥ 记账：把外层 runtime 的 trace（含子图复制来的 agent=/scope= 标签）落进 ctx，
+        // 让 eval 报告能按 Agent 归因。与 runtime 路径同样在失败抛出前 capture，失败链路也留痕。
+        // 注意只 capture、不走 toStageEventsForRuntime：SSE stageEvents 已由本方法 ②/③/Knowledge/Analyst
+        // 闭包按 PLAN/RETRIEVE/TOOL/GUARD 形状自行合成（外层 trace 名是 KNOWLEDGE/ANALYST，映射不到 StageName）。
+        captureRuntimeStageTraces(ctx, runtimeCtx.getStageTraces());
+
+        // ⑦ 子图失败照旧抛（与 runtime 路径一致语义）。
         StageTrace failed = firstFailedTrace(runtimeCtx.getStageTraces());
         if (failed != null) {
             throw new IllegalStateException("multi-agent node failed: " + failed.stage()

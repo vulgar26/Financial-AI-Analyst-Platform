@@ -19,6 +19,9 @@ import com.travel.ai.runtime.LinearWorkflowRuntime;
 import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.runtime.StageEventKind;
 import com.travel.ai.runtime.StageName;
+import com.travel.ai.runtime.node.AgentNode;
+import com.travel.ai.runtime.node.AnalystAgentNode;
+import com.travel.ai.runtime.node.KnowledgeAgentNode;
 import com.travel.ai.runtime.trace.StageTrace;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
@@ -391,6 +394,66 @@ class MainChatWorkflowAdapterTest {
 
     private static List<String> stageSeq(WorkflowTurnState ctx) {
         return ctx.stageEvents.stream().map(e -> e.stage().name() + ":" + e.kind().name()).toList();
+    }
+
+    // ---------- Phase 5：多 Agent 路径的 trace 可归因（哪个 Agent 出的问题） ----------
+
+    @Test
+    void multiAgent_runtimeTracesAreAttributableToEachAgent() {
+        // 命脉断言：多 Agent 路径记账后，每条 runtime trace 都能归因到某个 Agent，
+        // 且子步骤落在正确的 Agent 边界内（RETRIEVE/JUDGE∈KNOWLEDGE，TOOL/GUARD∈ANALYST）。
+        // 这正是对标简历「85% 准确率，错了赖哪个 Agent」答不出的那题的可测形态。
+        WorkflowTurnState ctx = state("price AAPL");
+        multiAgentAdapter(planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(ctx);
+
+        // 每条 trace 都带 agent= 归因（无裸 trace）。
+        assertThat(ctx.runtimeStageTraces).isNotEmpty();
+        assertThat(ctx.runtimeStageTraces).allSatisfy(t ->
+                assertThat(t.attrs().get(AgentNode.ATTR_AGENT)).isIn(KnowledgeAgentNode.NAME, AnalystAgentNode.NAME));
+
+        // 边界正确：检索/裁判归 Knowledge，工具/护栏归 Analyst。
+        assertThat(agentOf(ctx, StageName.RETRIEVE.name())).isEqualTo(KnowledgeAgentNode.NAME);
+        assertThat(agentOf(ctx, StageName.TOOL.name())).isEqualTo(AnalystAgentNode.NAME);
+        assertThat(agentOf(ctx, StageName.GUARD.name())).isEqualTo(AnalystAgentNode.NAME);
+
+        // 两层粒度并存：既有 scope=agent 的汇总，又有 scope=sub 的子步骤（报告可下钻）。
+        assertThat(ctx.runtimeStageTraces).anySatisfy(t ->
+                assertThat(t.attrs().get(AgentNode.ATTR_SCOPE)).isEqualTo(AgentNode.SCOPE_AGENT));
+        assertThat(ctx.runtimeStageTraces).anySatisfy(t ->
+                assertThat(t.attrs().get(AgentNode.ATTR_SCOPE)).isEqualTo(AgentNode.SCOPE_SUB));
+    }
+
+    @Test
+    void multiAgent_attributionFlowsThroughToEvalReport() {
+        // Plan 第三步钉死：RuntimeEvalTraceMapper 透传 attrs → agent= 自动进 eval 报告 DTO。
+        WorkflowTurnState ctx = state("price AAPL");
+        multiAgentAdapter(planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(ctx);
+
+        StageTrace retrieveSub = ctx.runtimeStageTraces.stream()
+                .filter(t -> StageName.RETRIEVE.name().equals(t.stage()))
+                .findFirst().orElseThrow();
+        var dto = com.travel.ai.eval.RuntimeEvalTraceMapper.toEvalStageTrace(retrieveSub);
+
+        assertThat(dto.getAttrs()).containsEntry(AgentNode.ATTR_AGENT, KnowledgeAgentNode.NAME);
+    }
+
+    @Test
+    void runtimePath_tracesHaveNoAgentAttribution() {
+        // 对照：单链路 runtime 路径的 trace 不带 agent=（归因是多 Agent 路径独有的差异化）。
+        WorkflowTurnState ctx = state("price AAPL");
+        adapter(true, planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(ctx);
+
+        assertThat(ctx.runtimeStageTraces).isNotEmpty();
+        assertThat(ctx.runtimeStageTraces).allSatisfy(t ->
+                assertThat(t.attrs()).doesNotContainKey(AgentNode.ATTR_AGENT));
+    }
+
+    /** 取首条 stage==name 的 trace 的 agent 归因标签。 */
+    private static String agentOf(WorkflowTurnState ctx, String stage) {
+        return ctx.runtimeStageTraces.stream()
+                .filter(t -> stage.equals(t.stage()))
+                .map(t -> t.attrs().get(AgentNode.ATTR_AGENT))
+                .findFirst().orElseThrow(() -> new AssertionError("no trace for stage " + stage));
     }
 
     private static MainChatWorkflowAdapter adapter(boolean runtimeEnabled, String planJson, PlanParser policyParser) {
