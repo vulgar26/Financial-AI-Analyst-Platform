@@ -16,6 +16,7 @@ public class AppAgentProperties {
     private Duration llmStreamTimeout = Duration.ofSeconds(20);
     private PlanStage planStage = new PlanStage();
     private WorkflowRuntime workflowRuntime = new WorkflowRuntime();
+    private MultiAgent multiAgent = new MultiAgent();
     private Rag rag = new Rag();
 
     public Duration getTotalTimeout() {
@@ -72,6 +73,17 @@ public class AppAgentProperties {
         this.workflowRuntime = workflowRuntime != null ? workflowRuntime : new WorkflowRuntime();
     }
 
+    public MultiAgent getMultiAgent() {
+        if (multiAgent == null) {
+            multiAgent = new MultiAgent();
+        }
+        return multiAgent;
+    }
+
+    public void setMultiAgent(MultiAgent multiAgent) {
+        this.multiAgent = multiAgent != null ? multiAgent : new MultiAgent();
+    }
+
     public Rag getRag() {
         if (rag == null) {
             rag = new Rag();
@@ -98,6 +110,24 @@ public class AppAgentProperties {
 
     /** Feature flag for the Phase R2 LinearWorkflowRuntime wrapper. Default is off. */
     public static class WorkflowRuntime {
+        private boolean enabled = false;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+    }
+
+    /**
+     * 多 Agent 图编排路径开关（{@code app.agent.multi-agent.enabled}）。默认 off。
+     *
+     * <p>开时走 KnowledgeAgentNode/AnalystAgentNode 复合节点的外层图编排；否则走现有两条路径
+     * （workflow-runtime 线性 / inline 内联）。三条路径优先级：multi-agent > workflow-runtime > inline。</p>
+     */
+    public static class MultiAgent {
         private boolean enabled = false;
 
         public boolean isEnabled() {

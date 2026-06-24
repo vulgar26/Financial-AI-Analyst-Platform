@@ -325,6 +325,74 @@ class MainChatWorkflowAdapterTest {
         assertThat(ctx.retrievalReplanCount).isEqualTo(0);
     }
 
+    // ---------- Phase 4：外层图编排路径 vs 现有 runtime 路径，端到端一致 ----------
+
+    @Test
+    void multiAgent_matchesRuntimePath_fullPipeline() {
+        WorkflowTurnState maCtx = state("price AAPL");
+        WorkflowTurnState rtCtx = state("price AAPL");
+        multiAgentAdapter(planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(maCtx);
+        adapter(true, planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(rtCtx);
+
+        assertThat(stageSeq(maCtx)).isEqualTo(stageSeq(rtCtx));
+        // 唯一不可控差异是 mock 工具内嵌的 as_of 墙钟时间戳（两条路径各自调一次工具，时间戳差几微秒）；
+        // 归一化后做逐字相等，保留「除不可避免的墙钟外，两路 prompt 完全一致」的强断言。
+        assertThat(normalizeAsOf(maCtx.finalPromptForLlm)).isEqualTo(normalizeAsOf(rtCtx.finalPromptForLlm));
+        assertThat(maCtx.skipLlmForEmptyHits).isEqualTo(rtCtx.skipLlmForEmptyHits);
+        assertThat(maCtx.docs).extracting(Document::getText).isEqualTo(rtCtx.docs.stream().map(Document::getText).toList());
+    }
+
+    private static String normalizeAsOf(String prompt) {
+        return prompt == null ? null : prompt.replaceAll("as_of=[^\\n]+", "as_of=<ts>");
+    }
+
+    @Test
+    void multiAgent_matchesRuntimePath_whenStagesSkipped() {
+        WorkflowTurnState maCtx = state("plain answer");
+        WorkflowTurnState rtCtx = state("plain answer");
+        multiAgentAdapter(planJson(false, false, false), realPlanParser()).runPreWriteWorkflow(maCtx);
+        adapter(true, planJson(false, false, false), realPlanParser()).runPreWriteWorkflow(rtCtx);
+
+        assertThat(stageSeq(maCtx)).isEqualTo(stageSeq(rtCtx));
+        assertThat(stageSeq(maCtx))
+                .containsExactly("PLAN:START", "PLAN:END", "RETRIEVE:SKIP", "TOOL:SKIP", "GUARD:SKIP");
+        assertThat(maCtx.finalPromptForLlm).isEqualTo(rtCtx.finalPromptForLlm);
+    }
+
+    @Test
+    void multiAgent_matchesRuntimePath_whenToolSkipped() {
+        WorkflowTurnState maCtx = state("price AAPL");
+        WorkflowTurnState rtCtx = state("price AAPL");
+        multiAgentAdapter(planJson(true, false, true), realPlanParser()).runPreWriteWorkflow(maCtx);
+        adapter(true, planJson(true, false, true), realPlanParser()).runPreWriteWorkflow(rtCtx);
+
+        assertThat(stageSeq(maCtx)).isEqualTo(stageSeq(rtCtx));
+        assertThat(maCtx.finalPromptForLlm).isEqualTo(rtCtx.finalPromptForLlm);
+        assertThat(maCtx.finalPromptForLlm).doesNotContain("BEGIN_TOOL_DATA");
+    }
+
+    @Test
+    void multiAgent_takesPriorityOverWorkflowRuntime() {
+        // 同时开 multi-agent 与 workflow-runtime：应走 multi-agent（优先级 multi-agent > workflow-runtime）。
+        WorkflowTurnState ctx = state("price AAPL");
+        MainChatWorkflowAdapter adapter = multiAgentAdapter(planJson(true, true, true), realPlanParser());
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        // 多 Agent 路径自己合成 stageEvents，且不把 KNOWLEDGE/ANALYST 当作 StageName 混进来。
+        assertThat(stageSeq(ctx)).containsExactly(
+                "PLAN:START", "PLAN:END",
+                "RETRIEVE:START", "RETRIEVE:END",
+                "TOOL:START", "TOOL:END",
+                "GUARD:START", "GUARD:END"
+        );
+        assertThat(ctx.workflowRuntimePath).isTrue();
+    }
+
+    private static List<String> stageSeq(WorkflowTurnState ctx) {
+        return ctx.stageEvents.stream().map(e -> e.stage().name() + ":" + e.kind().name()).toList();
+    }
+
     private static MainChatWorkflowAdapter adapter(boolean runtimeEnabled, String planJson, PlanParser policyParser) {
         AppAgentProperties properties = new AppAgentProperties();
         properties.getWorkflowRuntime().setEnabled(runtimeEnabled);
@@ -370,6 +438,54 @@ class MainChatWorkflowAdapterTest {
 
     private static PlanParser realPlanParser() {
         return new PlanParser(new ObjectMapper());
+    }
+
+    /**
+     * 多 Agent 图编排路径工厂。刻意同时打开 workflow-runtime，用来证明优先级 multi-agent &gt; workflow-runtime。
+     * 其余 wiring 与 {@link #adapter} 完全一致，从而支撑「同 query 同结果」的端到端一致性断言。
+     */
+    private static MainChatWorkflowAdapter multiAgentAdapter(String planJson, PlanParser policyParser) {
+        AppAgentProperties properties = new AppAgentProperties();
+        properties.getWorkflowRuntime().setEnabled(true);
+        properties.getMultiAgent().setEnabled(true);
+
+        MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
+        when(proposer.proposePlanJson(any(), any())).thenReturn(planJson);
+        PlanService planService = new PlanService(
+                proposer,
+                new PlanParseCoordinator(policyParser, hint -> planJson),
+                policyParser
+        );
+
+        QueryRewriter queryRewriter = mock(QueryRewriter.class);
+        when(queryRewriter.rewrite(any())).thenReturn(List.of("query-1"));
+        VectorStore vectorStore = mock(VectorStore.class);
+        when(vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(new Document("doc-1", "research hit", Map.of("source_name", "unit"))));
+        RetrieveService retrieveService = new RetrieveService(queryRewriter, vectorStore);
+
+        ToolInvocationService toolInvocationService = new ToolInvocationService(
+                new MarketDataTool(new MockFundamentalsDataSource()),
+                null,
+                null
+        );
+
+        return new MainChatWorkflowAdapter(
+                properties,
+                new LinearWorkflowRuntime(),
+                planService,
+                retrieveService,
+                toolInvocationService,
+                new GuardDecisionService(),
+                (q, docs) -> RetrievalRelevanceJudge.Verdict.relevant("stub-default-relevant"),
+                new PromptAssemblyService(null),
+                () -> true,
+                () -> 600,
+                () -> "clarify",
+                5,
+                2,
+                0.5
+        );
     }
 
     /**
