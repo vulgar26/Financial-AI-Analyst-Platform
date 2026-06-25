@@ -1,40 +1,32 @@
 package com.travel.ai.agent.workflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.travel.ai.agent.MarketDataTool;
-import com.travel.ai.finance.fundamentals.MockFundamentalsDataSource;
-import com.travel.ai.agent.QueryRewriter;
-import com.travel.ai.agent.guard.GuardDecisionService;
 import com.travel.ai.agent.guard.RetrievalRelevanceJudge;
-import com.travel.ai.agent.plan.MainLinePlanProposer;
-import com.travel.ai.agent.plan.PlanService;
-import com.travel.ai.agent.prompt.PromptAssemblyService;
-import com.travel.ai.agent.retrieve.RetrieveService;
 import com.travel.ai.agent.state.WorkflowTurnState;
-import com.travel.ai.agent.tool.ToolInvocationService;
-import com.travel.ai.config.AppAgentProperties;
-import com.travel.ai.plan.PlanParseCoordinator;
 import com.travel.ai.plan.PlanParser;
-import com.travel.ai.runtime.LinearWorkflowRuntime;
 import com.travel.ai.runtime.PolicyEvent;
 import com.travel.ai.runtime.StageEventKind;
 import com.travel.ai.runtime.StageName;
+import com.travel.ai.runtime.node.AgentNode;
+import com.travel.ai.runtime.node.AnalystAgentNode;
+import com.travel.ai.runtime.node.KnowledgeAgentNode;
 import com.travel.ai.runtime.trace.StageTrace;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
+import static com.travel.ai.agent.workflow.MainChatWorkflowAdapterFixtures.adapter;
+import static com.travel.ai.agent.workflow.MainChatWorkflowAdapterFixtures.inlineAdapterWithJudge;
+import static com.travel.ai.agent.workflow.MainChatWorkflowAdapterFixtures.multiAgentAdapter;
+import static com.travel.ai.agent.workflow.MainChatWorkflowAdapterFixtures.planJson;
+import static com.travel.ai.agent.workflow.MainChatWorkflowAdapterFixtures.realPlanParser;
+import static com.travel.ai.agent.workflow.MainChatWorkflowAdapterFixtures.state;
+import static com.travel.ai.agent.workflow.MainChatWorkflowAdapterFixtures.thresholdAwareAdapter;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 class MainChatWorkflowAdapterTest {
 
@@ -325,194 +317,132 @@ class MainChatWorkflowAdapterTest {
         assertThat(ctx.retrievalReplanCount).isEqualTo(0);
     }
 
-    private static MainChatWorkflowAdapter adapter(boolean runtimeEnabled, String planJson, PlanParser policyParser) {
-        AppAgentProperties properties = new AppAgentProperties();
-        properties.getWorkflowRuntime().setEnabled(runtimeEnabled);
+    // ---------- Phase 4：外层图编排路径 vs 现有 runtime 路径，端到端一致 ----------
 
-        MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
-        when(proposer.proposePlanJson(any(), any())).thenReturn(planJson);
-        PlanService planService = new PlanService(
-                proposer,
-                new PlanParseCoordinator(policyParser, hint -> planJson),
-                policyParser
-        );
+    @Test
+    void multiAgent_matchesRuntimePath_fullPipeline() {
+        WorkflowTurnState maCtx = state("price AAPL");
+        WorkflowTurnState rtCtx = state("price AAPL");
+        multiAgentAdapter(planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(maCtx);
+        adapter(true, planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(rtCtx);
 
-        QueryRewriter queryRewriter = mock(QueryRewriter.class);
-        when(queryRewriter.rewrite(any())).thenReturn(List.of("query-1"));
-        VectorStore vectorStore = mock(VectorStore.class);
-        when(vectorStore.similaritySearch(any(SearchRequest.class)))
-                .thenReturn(List.of(new Document("doc-1", "research hit", Map.of("source_name", "unit"))));
-        RetrieveService retrieveService = new RetrieveService(queryRewriter, vectorStore);
-
-        ToolInvocationService toolInvocationService = new ToolInvocationService(
-                new MarketDataTool(new MockFundamentalsDataSource()),
-                null,
-                null
-        );
-
-        return new MainChatWorkflowAdapter(
-                properties,
-                new LinearWorkflowRuntime(),
-                planService,
-                retrieveService,
-                toolInvocationService,
-                new GuardDecisionService(),
-                (q, docs) -> RetrievalRelevanceJudge.Verdict.relevant("stub-default-relevant"),
-                new PromptAssemblyService(null),
-                () -> true,
-                () -> 600,
-                () -> "clarify",
-                5,
-                2,
-                0.5
-        );
+        assertThat(stageSeq(maCtx)).isEqualTo(stageSeq(rtCtx));
+        // 唯一不可控差异是 mock 工具内嵌的 as_of 墙钟时间戳（两条路径各自调一次工具，时间戳差几微秒）；
+        // 归一化后做逐字相等，保留「除不可避免的墙钟外，两路 prompt 完全一致」的强断言。
+        assertThat(normalizeAsOf(maCtx.finalPromptForLlm)).isEqualTo(normalizeAsOf(rtCtx.finalPromptForLlm));
+        assertThat(maCtx.skipLlmForEmptyHits).isEqualTo(rtCtx.skipLlmForEmptyHits);
+        assertThat(maCtx.docs).extracting(Document::getText).isEqualTo(rtCtx.docs.stream().map(Document::getText).toList());
     }
 
-    private static PlanParser realPlanParser() {
-        return new PlanParser(new ObjectMapper());
+    private static String normalizeAsOf(String prompt) {
+        return prompt == null ? null : prompt.replaceAll("as_of=[^\\n]+", "as_of=<ts>");
     }
 
-    /**
-     * inline 路径(runtime disabled) + 自定义裁判：用于验证 inline 永远不咨询裁判、不回边。
-     */
-    private static MainChatWorkflowAdapter inlineAdapterWithJudge(String planJson, RetrievalRelevanceJudge relevanceJudge) {
-        AppAgentProperties properties = new AppAgentProperties();
-        properties.getWorkflowRuntime().setEnabled(false);
+    @Test
+    void multiAgent_matchesRuntimePath_whenStagesSkipped() {
+        WorkflowTurnState maCtx = state("plain answer");
+        WorkflowTurnState rtCtx = state("plain answer");
+        multiAgentAdapter(planJson(false, false, false), realPlanParser()).runPreWriteWorkflow(maCtx);
+        adapter(true, planJson(false, false, false), realPlanParser()).runPreWriteWorkflow(rtCtx);
 
-        PlanParser policyParser = realPlanParser();
-        MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
-        when(proposer.proposePlanJson(any(), any())).thenReturn(planJson);
-        PlanService planService = new PlanService(
-                proposer,
-                new PlanParseCoordinator(policyParser, hint -> planJson),
-                policyParser
-        );
-
-        QueryRewriter queryRewriter = mock(QueryRewriter.class);
-        when(queryRewriter.rewrite(any())).thenReturn(List.of("query-1"));
-        VectorStore vectorStore = mock(VectorStore.class);
-        when(vectorStore.similaritySearch(any(SearchRequest.class)))
-                .thenReturn(List.of(new Document("doc-1", "research hit", Map.of("source_name", "unit"))));
-        RetrieveService retrieveService = new RetrieveService(queryRewriter, vectorStore);
-
-        ToolInvocationService toolInvocationService = new ToolInvocationService(
-                new MarketDataTool(new MockFundamentalsDataSource()),
-                null,
-                null
-        );
-
-        return new MainChatWorkflowAdapter(
-                properties,
-                new LinearWorkflowRuntime(),
-                planService,
-                retrieveService,
-                toolInvocationService,
-                new GuardDecisionService(),
-                relevanceJudge,
-                new PromptAssemblyService(null),
-                () -> true,
-                () -> 600,
-                () -> "clarify",
-                5,
-                2,
-                0.5
-        );
-    }
-    /**
-     * Replan 专用：VectorStore 命中与否取决于 SearchRequest 的 similarityThreshold。
-     * 阈值 &gt;= {@code emptyAtOrAbove} 时返回空（模拟过严拦掉相关片段=假零命中），
-     * 低于它时返回命中（模拟降级阈值后召回成功）。把 emptyAtOrAbove 设成超大值即可模拟「真缺失」。
-     */
-    private static MainChatWorkflowAdapter thresholdAwareAdapter(String planJson, double emptyAtOrAbove) {
-        return thresholdAwareAdapter(planJson, emptyAtOrAbove,
-                (q, docs) -> RetrievalRelevanceJudge.Verdict.relevant("stub-default-relevant"));
+        assertThat(stageSeq(maCtx)).isEqualTo(stageSeq(rtCtx));
+        assertThat(stageSeq(maCtx))
+                .containsExactly("PLAN:START", "PLAN:END", "RETRIEVE:SKIP", "TOOL:SKIP", "GUARD:SKIP");
+        assertThat(maCtx.finalPromptForLlm).isEqualTo(rtCtx.finalPromptForLlm);
     }
 
-    private static MainChatWorkflowAdapter thresholdAwareAdapter(String planJson, double emptyAtOrAbove,
-                                                                 RetrievalRelevanceJudge relevanceJudge) {
-        AppAgentProperties properties = new AppAgentProperties();
-        properties.getWorkflowRuntime().setEnabled(true);
-        properties.getRag().setSimilarityThreshold(0.5);
-        properties.getRag().setReplanSimilarityThreshold(0.35);
+    @Test
+    void multiAgent_matchesRuntimePath_whenToolSkipped() {
+        WorkflowTurnState maCtx = state("price AAPL");
+        WorkflowTurnState rtCtx = state("price AAPL");
+        multiAgentAdapter(planJson(true, false, true), realPlanParser()).runPreWriteWorkflow(maCtx);
+        adapter(true, planJson(true, false, true), realPlanParser()).runPreWriteWorkflow(rtCtx);
 
-        PlanParser policyParser = realPlanParser();
-        MainLinePlanProposer proposer = mock(MainLinePlanProposer.class);
-        when(proposer.proposePlanJson(any(), any())).thenReturn(planJson);
-        PlanService planService = new PlanService(
-                proposer,
-                new PlanParseCoordinator(policyParser, hint -> planJson),
-                policyParser
-        );
-
-        QueryRewriter queryRewriter = mock(QueryRewriter.class);
-        when(queryRewriter.rewrite(any())).thenReturn(List.of("query-1"));
-        VectorStore vectorStore = mock(VectorStore.class);
-        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenAnswer(invocation -> {
-            SearchRequest req = invocation.getArgument(0);
-            if (req.getSimilarityThreshold() >= emptyAtOrAbove) {
-                return List.of();
-            }
-            return List.of(new Document("doc-1", "research hit", Map.of("source_name", "unit")));
-        });
-        RetrieveService retrieveService = new RetrieveService(queryRewriter, vectorStore);
-
-        ToolInvocationService toolInvocationService = new ToolInvocationService(
-                new MarketDataTool(new MockFundamentalsDataSource()),
-                null,
-                null
-        );
-
-        return new MainChatWorkflowAdapter(
-                properties,
-                new LinearWorkflowRuntime(),
-                planService,
-                retrieveService,
-                toolInvocationService,
-                new GuardDecisionService(),
-                relevanceJudge,
-                new PromptAssemblyService(null),
-                () -> true,
-                () -> 600,
-                () -> "clarify",
-                5,
-                2,
-                0.5
-        );
+        assertThat(stageSeq(maCtx)).isEqualTo(stageSeq(rtCtx));
+        assertThat(maCtx.finalPromptForLlm).isEqualTo(rtCtx.finalPromptForLlm);
+        assertThat(maCtx.finalPromptForLlm).doesNotContain("BEGIN_TOOL_DATA");
     }
 
-    private static WorkflowTurnState state(String userMessage) {
-        return new WorkflowTurnState("conv-1", userMessage, "req-1");
+    @Test
+    void multiAgent_takesPriorityOverWorkflowRuntime() {
+        // 同时开 multi-agent 与 workflow-runtime：应走 multi-agent（优先级 multi-agent > workflow-runtime）。
+        WorkflowTurnState ctx = state("price AAPL");
+        MainChatWorkflowAdapter adapter = multiAgentAdapter(planJson(true, true, true), realPlanParser());
+
+        adapter.runPreWriteWorkflow(ctx);
+
+        // 多 Agent 路径自己合成 stageEvents，且不把 KNOWLEDGE/ANALYST 当作 StageName 混进来。
+        assertThat(stageSeq(ctx)).containsExactly(
+                "PLAN:START", "PLAN:END",
+                "RETRIEVE:START", "RETRIEVE:END",
+                "TOOL:START", "TOOL:END",
+                "GUARD:START", "GUARD:END"
+        );
+        assertThat(ctx.workflowRuntimePath).isTrue();
     }
 
-    private static String planJson(boolean retrieve, boolean tool, boolean guard) {
-        StringBuilder steps = new StringBuilder();
-        int idx = 1;
-        if (retrieve) {
-            appendStep(steps, idx++, "RETRIEVE");
-        }
-        if (tool) {
-            appendStep(steps, idx++, "TOOL");
-        }
-        if (guard) {
-            appendStep(steps, idx++, "GUARD");
-        }
-        appendStep(steps, idx, "WRITE");
-        return "{\"plan_version\":\"v1\",\"goal\":\"unit\","
-                + "\"steps\":[" + steps + "],"
-                + "\"constraints\":{\"max_steps\":8,\"total_timeout_ms\":60000,\"tool_timeout_ms\":3000},"
-                + "\"notes\":\"unit\"}";
+    private static List<String> stageSeq(WorkflowTurnState ctx) {
+        return ctx.stageEvents.stream().map(e -> e.stage().name() + ":" + e.kind().name()).toList();
     }
 
-    private static void appendStep(StringBuilder steps, int idx, String stage) {
-        if (steps.length() > 0) {
-            steps.append(',');
-        }
-        steps.append("{\"step_id\":\"s")
-                .append(idx)
-                .append("\",\"stage\":\"")
-                .append(stage)
-                .append("\",\"instruction\":\"run ")
-                .append(stage.toLowerCase())
-                .append("\"}");
+    // ---------- Phase 5：多 Agent 路径的 trace 可归因（哪个 Agent 出的问题） ----------
+
+    @Test
+    void multiAgent_runtimeTracesAreAttributableToEachAgent() {
+        // 命脉断言：多 Agent 路径记账后，每条 runtime trace 都能归因到某个 Agent，
+        // 且子步骤落在正确的 Agent 边界内（RETRIEVE/JUDGE∈KNOWLEDGE，TOOL/GUARD∈ANALYST）。
+        // 这正是对标简历「85% 准确率，错了赖哪个 Agent」答不出的那题的可测形态。
+        WorkflowTurnState ctx = state("price AAPL");
+        multiAgentAdapter(planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(ctx);
+
+        // 每条 trace 都带 agent= 归因（无裸 trace）。
+        assertThat(ctx.runtimeStageTraces).isNotEmpty();
+        assertThat(ctx.runtimeStageTraces).allSatisfy(t ->
+                assertThat(t.attrs().get(AgentNode.ATTR_AGENT)).isIn(KnowledgeAgentNode.NAME, AnalystAgentNode.NAME));
+
+        // 边界正确：检索/裁判归 Knowledge，工具/护栏归 Analyst。
+        assertThat(agentOf(ctx, StageName.RETRIEVE.name())).isEqualTo(KnowledgeAgentNode.NAME);
+        assertThat(agentOf(ctx, StageName.TOOL.name())).isEqualTo(AnalystAgentNode.NAME);
+        assertThat(agentOf(ctx, StageName.GUARD.name())).isEqualTo(AnalystAgentNode.NAME);
+
+        // 两层粒度并存：既有 scope=agent 的汇总，又有 scope=sub 的子步骤（报告可下钻）。
+        assertThat(ctx.runtimeStageTraces).anySatisfy(t ->
+                assertThat(t.attrs().get(AgentNode.ATTR_SCOPE)).isEqualTo(AgentNode.SCOPE_AGENT));
+        assertThat(ctx.runtimeStageTraces).anySatisfy(t ->
+                assertThat(t.attrs().get(AgentNode.ATTR_SCOPE)).isEqualTo(AgentNode.SCOPE_SUB));
+    }
+
+    @Test
+    void multiAgent_attributionFlowsThroughToEvalReport() {
+        // Plan 第三步钉死：RuntimeEvalTraceMapper 透传 attrs → agent= 自动进 eval 报告 DTO。
+        WorkflowTurnState ctx = state("price AAPL");
+        multiAgentAdapter(planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(ctx);
+
+        StageTrace retrieveSub = ctx.runtimeStageTraces.stream()
+                .filter(t -> StageName.RETRIEVE.name().equals(t.stage()))
+                .findFirst().orElseThrow();
+        var dto = com.travel.ai.eval.RuntimeEvalTraceMapper.toEvalStageTrace(retrieveSub);
+
+        assertThat(dto.getAttrs()).containsEntry(AgentNode.ATTR_AGENT, KnowledgeAgentNode.NAME);
+    }
+
+    @Test
+    void runtimePath_tracesHaveNoAgentAttribution() {
+        // 对照：单链路 runtime 路径的 trace 不带 agent=（归因是多 Agent 路径独有的差异化）。
+        WorkflowTurnState ctx = state("price AAPL");
+        adapter(true, planJson(true, true, true), realPlanParser()).runPreWriteWorkflow(ctx);
+
+        assertThat(ctx.runtimeStageTraces).isNotEmpty();
+        assertThat(ctx.runtimeStageTraces).allSatisfy(t ->
+                assertThat(t.attrs()).doesNotContainKey(AgentNode.ATTR_AGENT));
+    }
+
+    /** 取首条 stage==name 的 trace 的 agent 归因标签。 */
+    private static String agentOf(WorkflowTurnState ctx, String stage) {
+        return ctx.runtimeStageTraces.stream()
+                .filter(t -> stage.equals(t.stage()))
+                .map(t -> t.attrs().get(AgentNode.ATTR_AGENT))
+                .findFirst().orElseThrow(() -> new AssertionError("no trace for stage " + stage));
     }
 }
+

@@ -23,6 +23,11 @@ public class WorkflowContext {
     private final List<StageTrace> stageTraces = new ArrayList<>();
     private final List<ToolTrace> toolTraces = new ArrayList<>();
     private final List<PolicyEvent> policyEvents = new ArrayList<>();
+    /**
+     * 类型安全的产物槽：复合节点（AgentNode）把子图产出的结构化产物（如 EvidencePackage）
+     * 从隔离子 context「提升」到外层 context 的唯一着陆点。attrs 只能放 String，结构化产物放这里。
+     */
+    private final Map<String, Object> products = new LinkedHashMap<>();
 
     public WorkflowContext(WorkflowTask task) {
         this.task = Objects.requireNonNull(task, "task must not be null");
@@ -77,5 +82,23 @@ public class WorkflowContext {
         if (event != null) {
             policyEvents.add(event);
         }
+    }
+
+    /**
+     * 放置一个结构化产物（如 KnowledgeAgentNode 产出的 EvidencePackage）。
+     * 同 key 覆盖。null 值忽略。
+     */
+    public void putProduct(String key, Object product) {
+        if (key != null && !key.isBlank() && product != null) {
+            products.put(key, product);
+        }
+    }
+
+    /**
+     * 按类型取回产物；不存在或类型不符返回 null。AgentNode 之间靠这个交接产物契约。
+     */
+    public <T> T getProduct(String key, Class<T> type) {
+        Object value = products.get(key);
+        return type.isInstance(value) ? type.cast(value) : null;
     }
 }

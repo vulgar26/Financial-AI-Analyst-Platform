@@ -8,9 +8,11 @@ import com.travel.ai.agent.guard.RetrieveEmptyHitGate;
 import com.travel.ai.agent.plan.PlanService;
 import com.travel.ai.agent.plan.PlanServiceRequest;
 import com.travel.ai.agent.plan.PlanServiceResult;
+import com.travel.ai.agent.prompt.AnalysisPackage;
 import com.travel.ai.agent.prompt.PromptAssemblyRequest;
 import com.travel.ai.agent.prompt.PromptAssemblyResult;
 import com.travel.ai.agent.prompt.PromptAssemblyService;
+import com.travel.ai.agent.retrieve.EvidencePackage;
 import com.travel.ai.agent.retrieve.RetrieveRequest;
 import com.travel.ai.agent.retrieve.RetrieveResult;
 import com.travel.ai.agent.retrieve.RetrieveService;
@@ -27,16 +29,22 @@ import com.travel.ai.runtime.StageName;
 import com.travel.ai.runtime.model.NodeStatus;
 import com.travel.ai.runtime.model.WorkflowContext;
 import com.travel.ai.runtime.model.WorkflowTask;
+import com.travel.ai.runtime.node.AnalystAgentDelegate;
+import com.travel.ai.runtime.node.AnalystAgentNode;
 import com.travel.ai.runtime.node.GuardStageNode;
+import com.travel.ai.runtime.node.KnowledgeAgentDelegate;
+import com.travel.ai.runtime.node.KnowledgeAgentNode;
 import com.travel.ai.runtime.node.PlanStageNode;
 import com.travel.ai.runtime.node.RetrieveStageNode;
 import com.travel.ai.runtime.node.ToolStageNode;
+import com.travel.ai.runtime.node.WorkflowNode;
 import com.travel.ai.runtime.trace.StageTrace;
 import com.travel.ai.runtime.trace.ToolTrace;
 import com.travel.ai.runtime.trace.RuntimeTraceMapper;
 import com.travel.ai.tools.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -44,6 +52,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
@@ -112,7 +121,9 @@ public final class MainChatWorkflowAdapter {
     }
 
     public void runPreWriteWorkflow(WorkflowTurnState ctx) {
-        if (shouldUseWorkflowRuntime(appAgentProperties)) {
+        if (shouldUseMultiAgent(appAgentProperties)) {
+            runMultiAgentWorkflow(ctx);
+        } else if (shouldUseWorkflowRuntime(appAgentProperties)) {
             runLinearStagesWithRuntime(ctx);
         } else {
             runLinearStages(ctx);
@@ -220,6 +231,230 @@ public final class MainChatWorkflowAdapter {
         return properties != null && properties.getWorkflowRuntime().isEnabled();
     }
 
+    public static boolean shouldUseMultiAgent(AppAgentProperties properties) {
+        return properties != null && properties.getMultiAgent().isEnabled();
+    }
+
+    /**
+     * 第三条路径：外层图编排。PLAN 先在图外当路由器跑定物理阶段，再据此组装
+     * {@code [KnowledgeAgentNode?, AnalystAgentNode]} 交给外层 runtime。两个 Agent 各有自治子图，
+     * 之间只穿 {@link EvidencePackage} 资料袋（{@code holder} 物理隔离）；产物 {@link AnalysisPackage}
+     * 经 lift 落外层产物槽后解包回 ctx。
+     *
+     * <p><strong>为何 PLAN 在图外</strong>：要按 PLAN 决定「这一轮到底激活不激活 Knowledge」。
+     * 若不检索却仍激活 Knowledge，其空 docs 路径会触发子图内部自我 replan = 会说谎的绿；
+     * 故跳过检索时直接套用 {@link #applyRetrieveSkippedState} + 空袋，不让 Knowledge 上场。</p>
+     *
+     * <p><strong>replan 归属（甲方案）</strong>：零命中/相关性重查整个归 Knowledge 的 JudgeSubNode（带回边）；
+     * 这里 Analyst 的 guard 闭包是纯澄清、无 replan。重查归检索质量，澄清归回答策略。</p>
+     *
+     * <p><strong>可观测</strong>：外层 trace 名是 KNOWLEDGE/ANALYST，映射不到 StageName，子图 trace 也不 lift，
+     * 故 {@link #toStageEventsForRuntime} 用不上；本方法自行合成 PLAN/RETRIEVE/TOOL/GUARD 的
+     * stageEvents（与 inline {@link #runLinearStages} 的 START/END/SKIP 形状对齐），保证与现有路径一致。</p>
+     */
+    void runMultiAgentWorkflow(WorkflowTurnState ctx) {
+        ctx.workflowRuntimePath = true;
+
+        // ① PLAN 路由器：图外先跑，定物理阶段。stageEvents 与 inline 对齐：PLAN START→END。
+        ctx.stageEvents.add(StageEvent.start(StageName.PLAN, ctx.requestId));
+        PlanStageNode.PhysicalStageFlags flags = stagePlanAndResolvePhysicalStages(ctx);
+        ctx.stageEvents.add(StageEvent.end(StageName.PLAN, ctx.requestId,
+                ctx.stageElapsedMs.getOrDefault(StageName.PLAN, 0L)));
+        onPhysicalStageFlagsResolved(ctx, flags);
+
+        // ② 资料袋桥：Knowledge 写入、Analyst 通过 holder::get 读取（物理够不着子图内部状态）。
+        AtomicReference<EvidencePackage> holder = new AtomicReference<>();
+
+        // ③ 据 PLAN 决定要不要激活 Knowledge。
+        List<WorkflowNode> agents = new ArrayList<>();
+        if (flags.runRetrieve()) {
+            agents.add(KnowledgeAgentNode.of(buildKnowledgeDelegate(ctx, holder)));
+        } else {
+            // 不检索：直接套用跳过态 + 空袋，不让 Knowledge 上场（避免其空路径自我 replan 说谎）。
+            applyRetrieveSkippedState(ctx);
+            holder.set(new EvidencePackage(ctx.currentUser, List.of(), List.of(),
+                    ctx.promptBase, ctx.citationBlock, 0L));
+            ctx.stageEvents.add(StageEvent.skip(StageName.RETRIEVE, ctx.requestId, "skipped_by_plan"));
+        }
+        agents.add(AnalystAgentNode.of(buildAnalystDelegate(ctx, flags), holder::get));
+
+        // ④ 跑外层 runtime（自治子图调度、回边由引擎管）。
+        WorkflowTask task = WorkflowTask.of(
+                "finance_analyst_chat",
+                "v1",
+                "finance",
+                ctx.requestId,
+                ctx.conversationId,
+                ctx.userMessage
+        );
+        WorkflowContext runtimeCtx = linearWorkflowRuntime.run(task, agents);
+
+        // ⑤ 解包 lift 上来的 AnalysisPackage 回 ctx。
+        AnalysisPackage analysis = runtimeCtx.getProduct(AnalystAgentNode.PRODUCT_ANALYSIS, AnalysisPackage.class);
+        if (analysis != null) {
+            ctx.finalPromptForLlm = analysis.finalPromptForLlm();
+            ctx.skipLlmForEmptyHits = analysis.skipLlm();
+            ctx.emptyHitsClarifyBody = analysis.clarifyBody();
+        }
+
+        // ⑥ 记账：把外层 runtime 的 trace（含子图复制来的 agent=/scope= 标签）落进 ctx，
+        // 让 eval 报告能按 Agent 归因。与 runtime 路径同样在失败抛出前 capture，失败链路也留痕。
+        // 注意只 capture、不走 toStageEventsForRuntime：SSE stageEvents 已由本方法 ②/③/Knowledge/Analyst
+        // 闭包按 PLAN/RETRIEVE/TOOL/GUARD 形状自行合成（外层 trace 名是 KNOWLEDGE/ANALYST，映射不到 StageName）。
+        captureRuntimeStageTraces(ctx, runtimeCtx.getStageTraces());
+
+        // ⑦ 子图失败照旧抛（与 runtime 路径一致语义）。
+        StageTrace failed = firstFailedTrace(runtimeCtx.getStageTraces());
+        if (failed != null) {
+            throw new IllegalStateException("multi-agent node failed: " + failed.stage()
+                    + (failed.message() != null && !failed.message().isBlank() ? " - " + failed.message() : ""));
+        }
+    }
+
+    /**
+     * Knowledge Agent 的 I/O 边界。retrieve 复用 {@link #retrieveService} + {@link EvidencePackage#from}，
+     * 阈值按子图给的 attempt 决定（0=正常阈值，&gt;0=降级阈值），改写提示按 relevanceReplan 决定；
+     * 产物写进 ctx（供合成 stageEvents 与后续 Analyst prompt 用）并塞进 holder。judge 复用相关性裁判，
+     * 任何内部失败回退 passThrough。
+     */
+    private KnowledgeAgentDelegate buildKnowledgeDelegate(WorkflowTurnState ctx, AtomicReference<EvidencePackage> holder) {
+        return new KnowledgeAgentDelegate() {
+            @Override
+            public EvidencePackage retrieve(int attempt, boolean relevanceReplan) {
+                long t0 = System.nanoTime();
+                log.info("[stage] RETRIEVE start attempt={} relevanceReplan={} requestId={}",
+                        attempt, relevanceReplan, ctx.requestId);
+                ctx.stageEvents.add(StageEvent.start(StageName.RETRIEVE, ctx.requestId));
+
+                ctx.currentUser = SecurityContextHolder.getContext().getAuthentication() != null
+                        ? SecurityContextHolder.getContext().getAuthentication().getName()
+                        : "anonymous";
+                double effectiveThreshold = attempt > 0
+                        ? appAgentProperties.getRag().getReplanSimilarityThreshold()
+                        : similarityThreshold;
+                if (attempt > 0) {
+                    log.info("[stage] RETRIEVE replan threshold {}->{} attempt={} requestId={}",
+                            similarityThreshold, effectiveThreshold, attempt, ctx.requestId);
+                }
+                String retrieveMessage = ctx.userMessage;
+                if (relevanceReplan) {
+                    retrieveMessage = REWRITE_HINT_PREFIX + (ctx.userMessage == null ? "" : ctx.userMessage);
+                    log.info("[stage] RETRIEVE relevance-replan rewrite-hint applied requestId={}", ctx.requestId);
+                }
+                RetrieveResult result = retrieveService.retrieve(new RetrieveRequest(
+                        retrieveMessage,
+                        ctx.currentUser,
+                        ctx.requestId,
+                        maxContextDocs,
+                        topKPerQuery,
+                        effectiveThreshold
+                ));
+                EvidencePackage evidence = EvidencePackage.from(result);
+                // 写回 ctx：用于合成 stageEvents（doc 数/elapsed）与 Analyst prompt 拼装的入参一致性。
+                ctx.currentUser = evidence.currentUser();
+                ctx.userFilter = new Filter.Expression(
+                        Filter.ExpressionType.EQ,
+                        new Filter.Key("user_id"),
+                        new Filter.Value(ctx.currentUser)
+                );
+                ctx.queries = evidence.queries();
+                ctx.docs = evidence.docs();
+                ctx.promptBase = evidence.promptBase();
+                ctx.citationBlock = evidence.citationBlock();
+                ctx.rewriteMs = result.rewriteMs();
+                ctx.retrieveMs = evidence.retrieveMs();
+                holder.set(evidence);
+
+                ctx.stageEvents.add(StageEvent.end(StageName.RETRIEVE, ctx.requestId,
+                        ctx.stageElapsedMs.getOrDefault(StageName.RETRIEVE, 0L)));
+                logPreWriteStageBoundary(StageName.RETRIEVE, t0, ctx);
+                return evidence;
+            }
+
+            @Override
+            public RetrievalRelevanceJudge.Verdict judge(List<Document> docs) {
+                return relevanceJudge.judge(ctx.userMessage, docs);
+            }
+        };
+    }
+
+    /**
+     * Analyst Agent 的 I/O 边界。invokeTool 复用 {@link #toolInvocationService}，工具 trace/policyEvents
+     * 收集到外层 ctx（不进 Agent 产物契约）。guard 是<strong>纯澄清</strong>——只把 {@link GuardDecisionResult}
+     * 的 skipLlm/clarifyBody 回传，<strong>不做任何 replan</strong>（replan 整个归 Knowledge）。assemblePrompt
+     * 复用 {@link #promptAssemblyService}。skipTool 时套用 {@link #applyToolSkippedState} 语义（空前言）。
+     */
+    private AnalystAgentDelegate buildAnalystDelegate(WorkflowTurnState ctx, PlanStageNode.PhysicalStageFlags flags) {
+        return new AnalystAgentDelegate() {
+            @Override
+            public void invokeTool() {
+                if (!flags.runTool()) {
+                    long t0 = System.nanoTime();
+                    log.info("[stage] TOOL skipped_by_plan requestId={}", ctx.requestId);
+                    ctx.toolPreface = "";
+                    ctx.stageEvents.add(StageEvent.skip(StageName.TOOL, ctx.requestId, "skipped_by_plan"));
+                    logPreWriteStageBoundary(StageName.TOOL, t0, ctx);
+                    return;
+                }
+                long t0 = System.nanoTime();
+                log.info("[stage] TOOL start requestId={}", ctx.requestId);
+                ctx.stageEvents.add(StageEvent.start(StageName.TOOL, ctx.requestId));
+                ToolInvocationResult invocation = toolInvocationService.invoke(new ToolInvocationRequest(
+                        ctx.userMessage,
+                        ctx.requestId,
+                        marketDataToolEnabled.getAsBoolean(),
+                        marketDataSummaryMaxChars.getAsInt()
+                ));
+                ctx.toolPreface = invocation.toolPreface();
+                if (invocation.toolResult() != null) {
+                    log(log, invocation.toolResult(), ctx.requestId);
+                    captureRuntimeToolTrace(ctx, invocation.toolResult());
+                }
+                ctx.policyEvents.addAll(invocation.policyEvents());
+                ctx.stageEvents.add(StageEvent.end(StageName.TOOL, ctx.requestId,
+                        ctx.stageElapsedMs.getOrDefault(StageName.TOOL, 0L)));
+                logPreWriteStageBoundary(StageName.TOOL, t0, ctx);
+            }
+
+            @Override
+            public GuardOutcome guard(EvidencePackage evidence) {
+                if (!flags.runGuard()) {
+                    log.info("[stage] GUARD skipped_by_plan requestId={}", ctx.requestId);
+                    ctx.stageEvents.add(StageEvent.skip(StageName.GUARD, ctx.requestId, "skipped_by_plan"));
+                    return new GuardOutcome(false, "");
+                }
+                long t0 = System.nanoTime();
+                log.info("[stage] GUARD start requestId={}", ctx.requestId);
+                ctx.stageEvents.add(StageEvent.start(StageName.GUARD, ctx.requestId));
+                GuardDecisionResult decision = guardDecisionService.decide(new GuardDecisionRequest(
+                        evidence.docs(),
+                        ctx.toolPreface,
+                        emptyHitsBehavior.get(),
+                        ctx.requestId
+                ));
+                // 纯澄清：replan 不在这里（归 Knowledge）。只落 skipLlm/clarifyBody 与可观测。
+                ctx.emptyHitsGateLogCode = decision.emptyHitsGateLogCode();
+                ctx.policyEvents.addAll(decision.policyEvents());
+                ctx.stageEvents.add(StageEvent.end(StageName.GUARD, ctx.requestId,
+                        ctx.stageElapsedMs.getOrDefault(StageName.GUARD, 0L)));
+                logPreWriteStageBoundary(StageName.GUARD, t0, ctx);
+                return new GuardOutcome(decision.skipLlm(),
+                        decision.clarifyBody() != null ? decision.clarifyBody() : "");
+            }
+
+            @Override
+            public String assemblePrompt(EvidencePackage evidence) {
+                PromptAssemblyResult result = promptAssemblyService.assemble(new PromptAssemblyRequest(
+                        ctx.currentUser,
+                        ctx.toolPreface,
+                        ctx.planJson,
+                        evidence.promptBase()
+                ));
+                return result.finalPromptForLlm();
+            }
+        };
+    }
+
     public static void captureRuntimeStageTraces(WorkflowTurnState ctx, List<StageTrace> traces) {
         if (ctx == null || traces == null || traces.isEmpty()) {
             return;
@@ -291,18 +526,23 @@ public final class MainChatWorkflowAdapter {
                 topKPerQuery,
                 effectiveThreshold
         ));
-        ctx.currentUser = result.currentUser();
+        // 阶段 1 等价重构：先把 Knowledge 产出装进「文件袋」EvidencePackage，再立刻解包回 ctx。
+        // 这一步刻意不改行为，只为先证明「打包→拆包」整条链路通且不丢字段；阶段 2 才把打包动作
+        // 搬进 KnowledgeAgentNode 内部，让 Analyst 只能读这个袋子（真隔离）。
+        // rewriteMs 是 Knowledge 内部细节、不进袋，故仍从 result 直接取。
+        EvidencePackage evidence = EvidencePackage.from(result);
+        ctx.currentUser = evidence.currentUser();
         ctx.userFilter = new Filter.Expression(
                 Filter.ExpressionType.EQ,
                 new Filter.Key("user_id"),
                 new Filter.Value(ctx.currentUser)
         );
-        ctx.queries = result.queries();
-        ctx.docs = result.docs();
-        ctx.promptBase = result.promptBase();
-        ctx.citationBlock = result.citationBlock();
+        ctx.queries = evidence.queries();
+        ctx.docs = evidence.docs();
+        ctx.promptBase = evidence.promptBase();
+        ctx.citationBlock = evidence.citationBlock();
         ctx.rewriteMs = result.rewriteMs();
-        ctx.retrieveMs = result.retrieveMs();
+        ctx.retrieveMs = evidence.retrieveMs();
 
         logPreWriteStageBoundary(StageName.RETRIEVE, t0, ctx);
     }
